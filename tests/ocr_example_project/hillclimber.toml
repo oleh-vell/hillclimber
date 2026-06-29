@@ -1,0 +1,31 @@
+path_to_artefact = "."
+strategy = "chain"
+
+# Fitness function: run the eval, whose evaluate() returns a hillclimber.Eval.
+[scorer]
+kind = "command"
+cmd = "python eval.py"
+
+# Climb toward a perfect extraction score; stop early if we reach it.
+[goal]
+direction = "maximize"
+target = 1.0
+
+# Hard stop: number of cycles to attempt.
+[budget]
+cycles = 1
+
+# Proposes the next hypothesis for improving the pipeline.
+[hillclimber_agent]
+harness = "api"
+model = "mistral-large"
+
+# Applies the proposed change to the artefact.
+[worker_agent]
+harness = "api"
+model = "mistral-large"
+
+# Reflects on the score delta and steers the next hypothesis.
+[reflector_agent]
+harness = "api"
+model = "mistral-large"
