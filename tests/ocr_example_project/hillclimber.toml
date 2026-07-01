@@ -18,14 +18,13 @@ cycles = 1
 # Proposes the next hypothesis for improving the pipeline.
 [hillclimber_agent]
 harness = "api"
-model = "mistral-large"
+model = "claude-sonnet-4-6"
 
 # Applies the proposed change to the artefact.
 [worker_agent]
 harness = "api"
-model = "mistral-large"
-
+model = "claude-sonnet-4-6"
 # Reflects on the score delta and steers the next hypothesis.
 [reflector_agent]
 harness = "api"
-model = "mistral-large"
+model = "claude-sonnet-4-6"

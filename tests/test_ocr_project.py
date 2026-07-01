@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 import hillclimber
-from hillclimber.models import Score
+from hillclimber.models import ExperimentStatus
 
 OCR_PROJECT = Path(__file__).parent / "ocr_example_project"
 
@@ -15,8 +15,9 @@ OCR_PROJECT = Path(__file__).parent / "ocr_example_project"
     reason="end-to-end run scores the live OCR pipeline; needs MISTRAL_API_KEY",
 )
 def test_end_to_end():
-    # v1 run: load the config, then score the baseline once with its scorer.
-    baseline = asyncio.run(hillclimber.run(path=OCR_PROJECT))
+    # v1 run: load the config, score the baseline, and drive the climb to a
+    # final ExperimentStatus.
+    status = asyncio.run(hillclimber.run(path=OCR_PROJECT))
 
-    assert isinstance(baseline, Score)
-    assert 0.0 <= baseline.value <= 1.0
+    assert isinstance(status, ExperimentStatus)
+    assert 0.0 <= status.baseline_score.value <= 1.0
