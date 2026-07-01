@@ -279,6 +279,37 @@ async def commit_all(worktree: str, message: str) -> str:
     return await head_sha(worktree)
 
 
+async def create_snapshot_commit(path: str, message: str) -> str:
+    """Snapshot the artefact's dirty working tree into a commit to climb from.
+
+    The opt-in alternative to refusing on a dirty tree (see ``Config.auto_commit``
+    / ``run``): instead of forcing the user to commit by hand, capture their
+    current uncommitted state — tracked *and* untracked changes — as a single
+    commit, and return its sha so the baseline and every cycle fork from the same
+    snapshot. That keeps the climb's core invariant (baseline and cycles measure
+    the same code) intact while including the user's in-progress edits.
+
+    Intended to be *non-destructive*: build the commit object without moving the
+    user's branch or mutating their working tree (e.g. via a temporary index), so
+    running the climb never leaves a surprise commit on their branch.
+
+    Args:
+        path: A directory or file inside the artefact repo; its root is used.
+        message: The commit message for the snapshot.
+
+    Returns:
+        The sha of the snapshot commit the climb should fork from.
+
+    Raises:
+        NotImplementedError: Always — the snapshot path is scaffolded but not yet
+            implemented.
+    """
+    raise NotImplementedError(
+        "auto_commit snapshotting is not implemented yet; commit or stash the "
+        "artefact's changes manually, or set auto_commit = false"
+    )
+
+
 async def check_uncommitted_changes(path: str) -> bool:
     """Whether the artefact repo has uncommitted changes.
 

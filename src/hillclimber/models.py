@@ -16,6 +16,7 @@ it, print it, discard it. It must never gain a method that mutates or persists.
 from __future__ import annotations
 
 from enum import StrEnum
+from pathlib import Path
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, model_validator
@@ -219,6 +220,11 @@ class Config(BaseModel):
     # forks from it. Empty/omitted -> the artefact's current ``HEAD`` (see
     # ``Chain._prepare_repo`` / ``get_baseline_score``).
     start_branch: str | None = None
+    # Opt-in convenience for a dirty artefact tree. Off by default, the runner
+    # refuses to start on uncommitted changes (baseline and cycles would measure
+    # different code; see ``run``). When on, the runner instead snapshots the
+    # dirty tree into a commit and climbs from that (see ``create_snapshot_commit``).
+    auto_commit: bool = False
     baseline_score: Score | None = None  # scored once, before any run
     scorer: Scorer  # the fitness function (v1: exactly one)
     # The OS sandbox that confines every agent CLI to its run's worktree. A
@@ -248,6 +254,27 @@ class Config(BaseModel):
             agent = getattr(self, role)
             if agent.system_prompt is None:
                 agent.system_prompt = default
+        return self
+
+    @model_validator(mode="after")
+    def _reject_absolute_scorer_path(self) -> Config:
+        """Reject a scorer command that hard-codes the artefact's absolute path.
+
+        The scorer runs at each cycle's worktree root (a clone of the artefact),
+        so its ``cmd`` must reference files by paths relative to that root. An
+        absolute path into the artefact would run the *original* tree instead of
+        the worktree — silently scoring unmodified code, so every cycle stays
+        pinned at the baseline. Catch it here rather than let it corrupt a whole
+        run. Cheap and high-signal: flag the resolved artefact path appearing
+        verbatim in ``cmd`` (only meaningful once it is absolute).
+        """
+        artefact = self.path_to_artefact
+        if Path(artefact).is_absolute() and artefact in self.scorer.cmd:
+            raise ValueError(
+                f"scorer cmd must use paths relative to the artefact root, but it contains "
+                f"the absolute artefact path {artefact!r}: {self.scorer.cmd!r}. "
+                "Write it relative to the artefact root (e.g. 'uv run python eval.py')."
+            )
         return self
 
 

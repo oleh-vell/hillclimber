@@ -18,6 +18,7 @@ from hillclimber.git_utils import (
     check_or_init_git,
     check_uncommitted_changes,
     create_detached_worktree,
+    create_snapshot_commit,
     remove_worktree,
 )
 from hillclimber.models import Config, ExperimentStatus, Score
@@ -55,19 +56,29 @@ async def run(path: str | Path) -> ExperimentStatus:
 
     # Cycles fork from committed state, so a dirty artefact would have the baseline
     # (scored on the working tree) and the cycles (forked from HEAD) measure
-    # different code. Refuse to start rather than silently diverge — commit or
-    # stash first.
+    # different code. By default, refuse to start rather than silently diverge;
+    # with ``auto_commit`` set, snapshot the dirty tree into a commit and climb
+    # from that instead (see ``create_snapshot_commit``).
     if await check_uncommitted_changes(config.path_to_artefact):
-        raise RuntimeError(
-            f"artefact has uncommitted changes at {config.path_to_artefact}; "
-            "commit or stash them before running (cycles fork from committed state)"
-        )
+        if config.auto_commit:
+            await create_snapshot_commit(config.path_to_artefact, "hillclimber: snapshot uncommitted changes")
+        else:
+            raise RuntimeError(
+                f"artefact has uncommitted changes at {config.path_to_artefact}; "
+                "commit or stash them before running (cycles fork from committed state), "
+                "or set auto_commit = true to snapshot them automatically"
+            )
 
     baseline = await get_baseline_score(config)
     # Build the OS sandbox that confines every agent CLI to its worktree and
     # hand it to the strategy, which threads it down into the harness.
     sandbox = get_sandbox(config.sandbox)
     strategy = Chain(sandbox)
+    # Preflight: prove the harness can actually run the configured models before
+    # spending a climb on worktrees and scoring. A bad model alias or an unauthed
+    # CLI fails here (cheaply) rather than on the first cycle.
+    logger.info("verifying harness can run the configured models")
+    await strategy.harness.verify(config)
     status = await strategy.execute(config, baseline)
     logger.info("experiment finished: %d/%d cycles run", status.completed, status.total)
     return status
@@ -79,8 +90,10 @@ async def get_baseline_score(config: Config) -> Score:
     The scorer is the fitness function (see ``Scorer`` / ``CommandScorer``). A
     command scorer runs its ``cmd`` in the artefact directory; the command emits
     its ``Eval`` as JSON on stdout (see ``Eval``), and that ``Eval.score`` is the
-    climbable value. A command that fails to run (non-zero exit) scores ``0.0``.
-    This baseline is the number later cycles must beat.
+    climbable value. This baseline is the number later cycles must beat, so a
+    scorer that cannot run is fatal: unlike a per-cycle score, a failing baseline
+    command raises ``ScorerError`` rather than fabricating a ``0.0`` the whole run
+    would then climb against (``require_success=True``).
 
     Where the baseline is scored tracks where cycle 1 forks from (see
     ``Chain._prepare_repo``), so the two measure the same code:
@@ -97,10 +110,11 @@ async def get_baseline_score(config: Config) -> Score:
             ``config.start_branch`` the ref to score at (if any).
 
     Returns:
-        The baseline ``Score`` — ``Eval.score`` as ``value`` when the command
-        ran, else ``0.0``.
+        The baseline ``Score`` — ``Eval.score`` as ``value`` (``passed`` true,
+        since a failing command aborts rather than returns).
 
     Raises:
+        ScorerError: If the scorer command failed to run (non-zero exit).
         ValueError: If the command ran but emitted no parseable ``Eval`` JSON.
     """
     if config.start_branch:
@@ -109,11 +123,10 @@ async def get_baseline_score(config: Config) -> Score:
         await check_or_init_git(config.path_to_artefact)
         worktree = await create_detached_worktree(config.path_to_artefact, _BASELINE_WORKTREE, config.start_branch)
         try:
-            score = await score_artefact(config.scorer, worktree)
+            score = await score_artefact(config.scorer, worktree, require_success=True)
         finally:
             await remove_worktree(config.path_to_artefact, _BASELINE_WORKTREE)
     else:
-        score = await score_artefact(config.scorer, config.path_to_artefact)
-    if score.passed:
-        logger.info("baseline scored: %.3f", score.value)
+        score = await score_artefact(config.scorer, config.path_to_artefact, require_success=True)
+    logger.info("baseline scored: %.3f", score.value)
     return score

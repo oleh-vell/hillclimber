@@ -23,6 +23,16 @@ from hillclimber.telemetry import get_logger
 logger = get_logger(__name__)
 
 
+class ScorerError(RuntimeError):
+    """The scorer command itself failed to run — no score could be measured.
+
+    Distinct from a low score: the fitness function never produced a number, so
+    there is nothing to climb. Raised when a scorer is *required* to succeed (the
+    baseline; see ``get_baseline_score``), as opposed to a per-cycle score where a
+    failing hypothesis legitimately scores ``0.0``.
+    """
+
+
 def _parse_eval(stdout: str) -> Eval:
     """Read the ``Eval`` a command scorer emits as JSON on its output.
 
@@ -52,23 +62,35 @@ def _parse_eval(stdout: str) -> Eval:
     raise ValueError("scorer produced no Eval JSON on stdout")
 
 
-async def score_artefact(scorer: Scorer, cwd: str | Path) -> Score:
+async def score_artefact(scorer: Scorer, cwd: str | Path, *, require_success: bool = False) -> Score:
     """Score the artefact in ``cwd`` with ``scorer``.
 
     A command scorer runs its ``cmd`` in ``cwd``; the command emits its ``Eval``
     as JSON on stdout (see ``Eval``), and that ``Eval.score`` is the climbable
-    value. A command that fails to run (non-zero exit) scores ``0.0``.
+    value.
+
+    A command that fails to run (non-zero exit) is handled one of two ways:
+
+    - ``require_success`` false (default, per-cycle scoring): the failure scores
+        ``0.0`` with ``passed`` false — a broken hypothesis is just a bad score.
+    - ``require_success`` true (the baseline): the failure raises ``ScorerError``.
+        A scorer that cannot run is a misconfiguration, not a score of zero, and
+        there is no hill to climb without a valid baseline — so abort loudly
+        rather than fabricate a ``0.0`` the whole run would then climb against.
 
     Args:
         scorer: The fitness function to run (v1: a command scorer).
         cwd: The directory to score in — the artefact directory for the baseline,
             a run's worktree once a hypothesis has been applied.
+        require_success: Treat a non-zero exit as fatal (raise ``ScorerError``)
+            rather than a ``0.0`` score. Set for the baseline.
 
     Returns:
         The ``Score`` — ``Eval.score`` as ``value`` when the command ran, else
         ``0.0`` with ``passed`` false.
 
     Raises:
+        ScorerError: If the command failed (non-zero exit) and ``require_success``.
         ValueError: If the command ran but emitted no parseable ``Eval`` JSON.
     """
     logger.debug("scoring: %s (cwd=%s)", scorer.cmd, cwd)
@@ -81,7 +103,10 @@ async def score_artefact(scorer: Scorer, cwd: str | Path) -> Score:
     stdout, stderr = await proc.communicate()
 
     if proc.returncode != 0:
-        logger.warning("scorer failed (exit=%s): %s", proc.returncode, stderr.decode().strip())
+        detail = stderr.decode().strip()
+        if require_success:
+            raise ScorerError(f"scorer {scorer.cmd!r} failed (exit={proc.returncode}) in {cwd}: {detail}")
+        logger.warning("scorer failed (exit=%s): %s", proc.returncode, detail)
         return Score(value=0.0, passed=False, scorer_id=scorer.kind)
 
     evaluation = _parse_eval(stdout.decode())

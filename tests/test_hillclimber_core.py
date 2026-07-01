@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 import hillclimber
-from hillclimber import Config, get_baseline_score
+from hillclimber import Config, ScorerError, get_baseline_score
 from hillclimber.models import Agent, Budget, CommandScorer
 
 PROJECT_FOLDERS = Path(__file__).parent / "example_project_folders"
@@ -48,12 +48,14 @@ def test_baseline_score_takes_the_last_eval_line():
     assert score.value == 0.9
 
 
-def test_baseline_score_fails_when_command_fails():
+def test_baseline_score_raises_when_command_fails():
+    # A baseline scorer that cannot run is a misconfiguration, not a score of
+    # zero: without a valid baseline there is no hill to climb, so abort loudly
+    # rather than fabricate a 0.0 the whole run would then climb against.
     config = _config(EXAMPLE_PROJECT)
     config.scorer = CommandScorer(cmd="false")  # exits non-zero
-    score = asyncio.run(get_baseline_score(config))
-    assert not score.passed
-    assert score.value == 0.0
+    with pytest.raises(ScorerError):
+        asyncio.run(get_baseline_score(config))
 
 
 def test_baseline_score_raises_when_no_eval_emitted():
@@ -126,4 +128,22 @@ def test_run_refuses_to_start_on_a_dirty_artefact(tmp_path: Path):
     (tmp_path / "a.txt").write_text("changed\n")
 
     with pytest.raises(RuntimeError, match="uncommitted"):
+        asyncio.run(hillclimber.run(tmp_path))
+
+
+def test_run_snapshots_a_dirty_artefact_when_auto_commit_set(tmp_path: Path):
+    # Same dirty repo, but auto_commit opts into snapshotting instead of refusing.
+    _git("init", cwd=tmp_path)
+    # Inject the top-level auto_commit key before the first table so it doesn't
+    # land inside [reflector_agent].
+    toml = _GUARD_TOML.format(path=tmp_path).replace("[scorer]", "auto_commit = true\n[scorer]", 1)
+    (tmp_path / "hillclimber.toml").write_text(toml)
+    (tmp_path / "a.txt").write_text("x\n")
+    _git("add", "-A", cwd=tmp_path)
+    _git("commit", "-m", "init", cwd=tmp_path)
+    (tmp_path / "a.txt").write_text("changed\n")
+
+    # The snapshot path is scaffolded but not yet implemented, so it surfaces the
+    # NotImplementedError rather than the refusal — the run took the opt-in branch.
+    with pytest.raises(NotImplementedError, match="not implemented"):
         asyncio.run(hillclimber.run(tmp_path))

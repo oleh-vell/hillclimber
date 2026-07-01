@@ -1,3 +1,5 @@
+# Paths are relative to this toml, which must sit at the artefact root; "." (the
+# default when omitted) is the config's own directory.
 path_to_artefact = "."
 strategy = "chain"
 # Ref the climb starts from (baseline scored at it, cycle 1 forks from it).
@@ -5,9 +7,13 @@ strategy = "chain"
 # start_branch = "main"
 
 # Fitness function: run the eval, whose evaluate() returns a hillclimber.Eval.
+# The command runs with cwd set to the cycle's worktree, so the path must be
+# relative: an absolute path would run the original eval.py, whose sys.path[0] is
+# the original dir, so it would import the unmodified ocr_pipeline and score the
+# wrong copy (every cycle stuck at the baseline). Relative -> the worktree's copy.
 [scorer]
 kind = "command"
-cmd = "python eval.py"
+cmd = "uv run python eval.py"
 
 # Climb toward a perfect extraction score; stop early if we reach it.
 [goal]

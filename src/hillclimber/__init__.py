@@ -3,11 +3,13 @@
 from hillclimber.config import load_config
 from hillclimber.models import Config, Eval
 from hillclimber.run import get_baseline_score, run
+from hillclimber.scoring import ScorerError
 from hillclimber.telemetry import configure_logging, get_logger
 
 __all__ = [
     "Config",
     "Eval",
+    "ScorerError",
     "configure_logging",
     "get_baseline_score",
     "get_logger",
