@@ -60,7 +60,7 @@ indent-style = "space"
 
 [tool.ty.environment]
 python-version = "3.12"
-root = ["./src", "./tests"]
+root = ["./src", "./tests", "./test_projects/slow_stats"]  # each test project dir is its own import root
 
 [tool.ty.rules]
 # Surface implicit/missing annotations as errors rather than warnings.
