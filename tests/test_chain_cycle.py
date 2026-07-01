@@ -30,6 +30,11 @@ class _RecordingHarness(Harness):
         self.calls.append(harness_run)
         return "use a regex instead of str.split()"
 
+    async def verify_model(self, model: str) -> None:
+        # These tests drive the harness directly, never the preflight; a no-op
+        # satisfies the abstract contract.
+        return None
+
 
 def _config() -> Config:
     agent = {"harness": "claude", "model": "claude-opus-4-8"}

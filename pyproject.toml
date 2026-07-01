@@ -7,6 +7,8 @@ requires-python = ">=3.12"
 dependencies = [
     "mistralai>=2.5.0",
     "pydantic>=2.13.4",
+    "rich>=15.0.0",
+    "typer>=0.26.8",
 ]
 
 [project.optional-dependencies]
@@ -17,6 +19,9 @@ otel = [
     "opentelemetry-sdk>=1.20",
     "opentelemetry-exporter-otlp-proto-http>=1.20",
 ]
+
+[project.scripts]
+hillclimber = "hillclimber.cli:main"
 
 [build-system]
 requires = ["hatchling"]
