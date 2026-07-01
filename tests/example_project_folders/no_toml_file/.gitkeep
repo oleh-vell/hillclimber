@@ -1,0 +1,3 @@
+# Fixture: a project directory deliberately WITHOUT a hillclimber.toml.
+# Kept tracked (git cannot store an empty dir) so baseline-scoring tests in
+# test_hillclimber_core.py have a real cwd on a clean checkout.
