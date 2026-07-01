@@ -1,0 +1,110 @@
+"""macOS Seatbelt sandbox (``sandbox-exec``).
+
+Wraps the agent argv with ``sandbox-exec -p <profile> ...`` so the child runs
+under a Seatbelt policy that denies writes outside the worktree and reads of the
+configured sensitive roots, while leaving the system/CLI boot paths readable.
+
+Empirically validated on macOS (these facts drive the profile shape):
+
+- ``(deny default)`` starves the Node-based CLI of boot paths and it aborts at
+  startup (exit 134). The working recipe is ``(allow default)`` plus targeted
+  ``(deny file-write*)`` / ``(deny file-read* ...)`` and re-allows.
+- Seatbelt is **last-match-wins**: the worktree read re-allow MUST come after the
+  read-deny block, because the worktree usually sits *under* a denied root (e.g.
+  the worktree is ``~/projects/<repo>/hc_...`` and ``~/projects`` is denied) — the
+  trailing allow rescues it.
+- ``/tmp`` is a symlink to ``/private/tmp``; profile paths must be the realpath or
+  rules silently fail to match. Every embedded path is ``os.path.realpath``'d.
+
+Selecting this backend on a non-macOS platform hard-errors at construction: a
+sandbox that silently no-ops is worse than none. Use the ``none`` backend
+(``PassthroughSandbox``) to opt out explicitly.
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+
+from sandboxes.base import Sandbox
+
+
+def _render_profile(workdir: str, deny_read: list[str], network: bool) -> str:
+    """Render the Seatbelt profile confining a child to ``workdir``.
+
+    Pure string work (no shelling out, no I/O beyond ``realpath``) so it is unit
+    testable in isolation. ``workdir`` and every ``deny_read`` root are
+    ``~``-expanded and ``realpath``'d before being embedded, so symlinked inputs
+    (e.g. ``/tmp`` -> ``/private/tmp``) match the rules.
+
+    Args:
+        workdir: The worktree the child is confined to (read+write allowed).
+        deny_read: Sensitive roots the child may not read.
+        network: When ``False``, append ``(deny network*)``; when ``True``, the
+            default profile's ``(allow default)`` already permits network.
+
+    Returns:
+        The Seatbelt profile text to pass to ``sandbox-exec -p``.
+    """
+    work = os.path.realpath(os.path.expanduser(workdir))
+    roots = [os.path.realpath(os.path.expanduser(r)) for r in deny_read]
+
+    lines = [
+        "(version 1)",
+        "(allow default)",
+        "",
+        "; writes: deny everything, then re-allow the worktree + essentials",
+        "(deny file-write*)",
+        "(allow file-write*",
+        f'  (subpath "{work}")',
+        '  (subpath "/private/var/folders")',
+        '  (regex #"^/dev/tty")',
+        '  (literal "/dev/null"))',
+    ]
+
+    # Only emit the read-deny block (and its rescuing worktree re-allow) when
+    # there is something to deny. An empty ``deny_read`` must NOT degrade into a
+    # bare ``(deny file-read*)`` — that would deny-read everything and starve the
+    # CLI. With no denies, ``(allow default)`` already permits all reads.
+    if roots:
+        lines.append("")
+        lines.append("; reads: deny the sensitive trees, then re-allow the worktree LAST (last-match-wins)")
+        lines.append("(deny file-read*")
+        deny_lines = [f'  (subpath "{r}")' for r in roots]
+        deny_lines[-1] += ")"
+        lines.extend(deny_lines)
+        lines.append("(allow file-read*")
+        lines.append(f'  (subpath "{work}"))')
+
+    if not network:
+        lines.append("")
+        lines.append("(deny network*)")
+
+    return "\n".join(lines) + "\n"
+
+
+class SeatbeltSandbox(Sandbox):
+    """Confine an agent CLI with macOS Seatbelt (``sandbox-exec``)."""
+
+    def __init__(self, deny_read: list[str], network: bool) -> None:
+        """Build the backend from its resolved policy.
+
+        Args:
+            deny_read: Sensitive roots the agent may not read.
+            network: Whether outbound network access is allowed.
+
+        Raises:
+            RuntimeError: If constructed on a non-macOS platform — Seatbelt is
+                macOS-only; use the ``none`` sandbox backend to opt out.
+        """
+        if sys.platform != "darwin":
+            raise RuntimeError(
+                f"the seatbelt sandbox requires macOS (sandbox-exec); platform is {sys.platform!r}. "
+                'Set [sandbox] kind = "none" to run without a sandbox.'
+            )
+        self.deny_read = deny_read
+        self.network = network
+
+    def wrap(self, argv: list[str], workdir: str) -> list[str]:
+        profile = _render_profile(workdir, self.deny_read, self.network)
+        return ["sandbox-exec", "-p", profile, *argv]

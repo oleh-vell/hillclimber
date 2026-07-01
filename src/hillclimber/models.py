@@ -3,7 +3,7 @@
 Three levels of types:
 
 - **Write models** (persisted, authoritative): ``Experiment`` -> ``hillclimber.toml``,
-  ``Run`` -> ``run_<id>.lock``.
+  ``Run`` -> ``cyc_<NNN>.lock``.
 - **Read model** (computed on demand, never stored): ``ExperimentStatus`` /
   ``RunSummary``. Powers ``hillclimber status``. *Best-so-far* is computed here,
   not persisted anywhere.
@@ -15,8 +15,8 @@ it, print it, discard it. It must never gain a method that mutates or persists.
 
 from __future__ import annotations
 
-from enum import Enum
-from typing import Annotated, Literal, Union
+from enum import StrEnum
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -27,7 +27,7 @@ from hillclimber import prompt
 # --------------------------------------------------------------------------- #
 
 
-class RunStatus(str, Enum):
+class RunStatus(StrEnum):
     """Lifecycle of a single run."""
 
     running = "running"
@@ -66,7 +66,13 @@ class Agent(BaseModel):
         if not extra:
             return data
         rest = {k: v for k, v in data.items() if k in known}
-        rest["params"] = {**extra, **rest.get("params", {})}
+        # An explicit ``params`` table wins on key collisions; guard its type so a
+        # malformed (non-mapping) ``params`` is treated as empty rather than blowing
+        # up the spread.
+        explicit = rest.get("params", {})
+        if not isinstance(explicit, dict):
+            explicit = {}
+        rest["params"] = {**extra, **explicit}
         return rest
 
 
@@ -77,10 +83,55 @@ class CommandScorer(BaseModel):
     cmd: str  # e.g. "pytest test_eval.py"
 
 
-# The fitness function. One scorer per experiment; the discriminated union is
-# the seam for adding kinds (e.g. a judge) later.
+# The fitness function. One scorer per experiment; the ``kind`` discriminator is
+# the seam for adding kinds (e.g. a judge) later — widen to ``CommandScorer |
+# JudgeScorer`` when a second arrives.
 Scorer = Annotated[
-    Union[CommandScorer],
+    CommandScorer,
+    Field(discriminator="kind"),
+]
+
+
+# Sensitive roots an agent CLI is denied *read* access to by default (see
+# ``SeatbeltSandboxConfig``). The active worktree lives under ``~/projects`` and
+# is re-allowed by the rendered profile, so the agent still sees its own
+# checkout; the CLI's own state dirs (``~/.nvm``, ``~/.claude``, ``~/.codex``)
+# are intentionally absent so the Node-based CLI can still boot.
+DEFAULT_DENY_READ = [
+    "~/projects",
+    "~/Documents",
+    "~/Desktop",
+    "~/.ssh",
+    "~/.aws",
+    "~/.config/gcloud",
+]
+
+
+class SeatbeltSandboxConfig(BaseModel):
+    """Confine agents to their worktree with macOS Seatbelt (``sandbox-exec``).
+
+    ``deny_read`` are roots the agent may not read (secrets, other code);
+    ``network`` gates outbound access. Selecting this kind on a non-macOS
+    platform hard-errors at sandbox construction (see ``SeatbeltSandbox``) —
+    use ``kind = "none"`` to opt out explicitly.
+    """
+
+    kind: Literal["seatbelt"] = "seatbelt"
+    deny_read: list[str] = Field(default_factory=lambda: list(DEFAULT_DENY_READ))
+    network: bool = True
+
+
+class PassthroughSandboxConfig(BaseModel):
+    """No sandbox — run the agent CLI unconfined. The explicit opt-out."""
+
+    kind: Literal["none"] = "none"
+
+
+# The filesystem sandbox backend. Like ``Scorer``, the ``kind`` discriminator is
+# the seam for adding backends (bubblewrap, docker, ...) later — they slot in as
+# new variants with no caller changes.
+SandboxConfig = Annotated[
+    SeatbeltSandboxConfig | PassthroughSandboxConfig,
     Field(discriminator="kind"),
 ]
 
@@ -117,15 +168,42 @@ class Goal(BaseModel):
     """
 
     direction: str = "maximize"  # v1: "maximize" only
-    target: float | None = (
-        None  # optional success threshold (early-stop hook; unused in v1)
-    )
+    target: float | None = None  # optional success threshold (early-stop hook; unused in v1)
+
+    def is_met(self, best: Score | None) -> bool:
+        """Whether ``best`` satisfies the goal — the loop's early-stop check.
+
+        v1 only maximizes toward an optional ``target``. With no target set (or
+        nothing scored yet), the goal is never met, so the climb runs until the
+        budget is exhausted. This is the early-stop seam: dormant until a
+        ``target`` is configured.
+
+        Args:
+            best: The best ``Score`` achieved so far, or ``None`` before any run.
+
+        Returns:
+            ``True`` if ``best`` reaches ``target`` (maximizing), else ``False``.
+        """
+        if best is None or self.target is None:
+            return False
+        return best.value >= self.target
 
 
 class Budget(BaseModel):
     """Hard stop condition. v1: number of iterations only."""
 
     cycles: int  # number of runs to attempt
+
+    def is_exhausted(self, completed: int) -> bool:
+        """Whether ``completed`` cycles have used up the budget.
+
+        Args:
+            completed: The number of cycles attempted so far.
+
+        Returns:
+            ``True`` once ``completed`` reaches the ``cycles`` budget.
+        """
+        return completed >= self.cycles
 
 
 # --------------------------------------------------------------------------- #
@@ -139,6 +217,9 @@ class Config(BaseModel):
     path_to_artefact: str
     baseline_score: Score | None = None  # scored once, before any run
     scorer: Scorer  # the fitness function (v1: exactly one)
+    # The OS sandbox that confines every agent CLI to its run's worktree. A
+    # ``hillclimber.toml`` with no ``[sandbox]`` table gets the Seatbelt default.
+    sandbox: SandboxConfig = Field(default_factory=SeatbeltSandboxConfig)
     strategy: Literal["chain"] = "chain"  # valid strategies; v1: "chain" only
     goal: Goal = Field(default_factory=Goal)  # what the climb optimizes toward
     budget: Budget  # hard stop condition (v1: cycles only)
@@ -167,23 +248,30 @@ class Config(BaseModel):
 
 
 class Run(BaseModel):
-    """One hypothesis attempt in its own git worktree. Maps to ``run_<id>.lock``.
+    """One hypothesis attempt in its own git worktree. Maps to ``cyc_<NNN>.lock``.
 
-    The set of runs is just the collection of these files on disk — there is no
-    parent object holding the list.
+    A run belongs to an experiment (``experiment_id``, e.g. ``exp_a1b2c3d4``) and
+    is the ``cycle``-th attempt within it (1-based). The set of runs is just the
+    collection of these lock files on disk — there is no parent object holding
+    the list.
     """
 
-    id: str  # ULID-suffixed, globally unique & sortable
+    experiment_id: str  # e.g. exp_a1b2c3d4, minted once per experiment
+    cycle: int  # 1-based attempt number within the experiment
     parent_ref: str  # baseline in v1; seam for later strategies
     branch: str  # the experiment branch
-    worktree: str  # e.g. hc_run_<id>/
+    worktree: str  # e.g. hc_a1b2_cycle_001/
     hypothesis: str  # what this run tried (e.g. "Use pydantic...")
     score_before: Score
     score_after: Score | None = None
     accepted: bool = False
     status: RunStatus
     commit_sha: str | None = None  # pointer to the actual change
-    agents_used: AgentRoles | None = None  # only if agents vary per run; else omit
+
+    @property
+    def cycle_id(self) -> str:
+        """Human-facing cycle label, e.g. ``cyc_001`` for ``cycle == 1``."""
+        return f"cyc_{self.cycle:03d}"
 
 
 # --------------------------------------------------------------------------- #
@@ -194,7 +282,8 @@ class Run(BaseModel):
 class RunSummary(BaseModel):
     """A flattened, display-oriented view of a single run."""
 
-    id: str
+    experiment_id: str
+    cycle_id: str  # e.g. cyc_001
     status: RunStatus
     score_after: Score | None = None
     accepted: bool
@@ -209,6 +298,6 @@ class ExperimentStatus(BaseModel):
     baseline_score: Score
     runs: list[RunSummary]
     best: RunSummary | None = None  # COMPUTED, not stored
-    in_progress: list[str] = Field(default_factory=list)  # run ids currently running
+    in_progress: list[str] = Field(default_factory=list)  # cycle ids currently running
     completed: int
     total: int

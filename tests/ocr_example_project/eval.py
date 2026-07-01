@@ -9,24 +9,16 @@ moves smoothly from 0.0 (all wrong) to 1.0 (every field correct).
 
 import re
 
-import hillclimber
-
 from ocr_pipeline import Book, run
+
+import hillclimber
 
 # Ground truth, keyed by the image filename in eval_data/.
 GROUND_TRUTH: dict[str, Book] = {
-    "james_bond_01_casino_royale_600x.jpg.webp": Book(
-        title="Casino Royale", author="Ian Fleming"
-    ),
-    "james_bond_02_live_and_let_die_1200x.jpg.webp": Book(
-        title="Live and Let Die", author="Ian Fleming"
-    ),
-    "james_bond_04_diamonds_are_forever_600x.jpg.webp": Book(
-        title="Diamonds Are Forever", author="Ian Fleming"
-    ),
-    "james_bond_07_goldfinger_600x.jpg.webp": Book(
-        title="Goldfinger", author="Ian Fleming"
-    ),
+    "james_bond_01_casino_royale_600x.jpg.webp": Book(title="Casino Royale", author="Ian Fleming"),
+    "james_bond_02_live_and_let_die_1200x.jpg.webp": Book(title="Live and Let Die", author="Ian Fleming"),
+    "james_bond_04_diamonds_are_forever_600x.jpg.webp": Book(title="Diamonds Are Forever", author="Ian Fleming"),
+    "james_bond_07_goldfinger_600x.jpg.webp": Book(title="Goldfinger", author="Ian Fleming"),
 }
 
 
@@ -64,5 +56,6 @@ def evaluate() -> hillclimber.Eval:
 
 
 if __name__ == "__main__":
-    result = evaluate()
-    print(f"score={result.score:.3f} {result.details}")
+    # The runner scores by reading this line: the Eval as JSON on stdout (see
+    # hillclimber.run.get_baseline_score). Keep it the last thing printed.
+    print(evaluate().model_dump_json())
