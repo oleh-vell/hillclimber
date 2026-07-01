@@ -63,6 +63,29 @@ def test_baseline_score_raises_when_no_eval_emitted():
         asyncio.run(get_baseline_score(config))
 
 
+def test_baseline_score_uses_start_branch_when_set(tmp_path: Path):
+    # main holds score 0.7; the current branch (wip) holds a different score.
+    _git("init", "-b", "main", cwd=tmp_path)
+    (tmp_path / "score.json").write_text('{"score": 0.7}\n')
+    _git("add", "-A", cwd=tmp_path)
+    _git("commit", "-m", "main", cwd=tmp_path)
+    _git("checkout", "-b", "wip", cwd=tmp_path)
+    (tmp_path / "score.json").write_text('{"score": 0.1}\n')
+    _git("add", "-A", cwd=tmp_path)
+    _git("commit", "-m", "wip", cwd=tmp_path)
+
+    config = _config(tmp_path)
+    config.scorer = CommandScorer(cmd="cat score.json")
+    config.start_branch = "main"
+
+    score = asyncio.run(get_baseline_score(config))
+
+    # Scored at start_branch (main -> 0.7), not the checked-out wip (0.1)...
+    assert score.value == 0.7
+    # ...and the throwaway baseline worktree is cleaned up afterward.
+    assert not (tmp_path / ".hillclimber" / "hc_baseline").exists()
+
+
 # --------------------------------------------------------------------------- #
 # run: dirty-artefact guard
 # --------------------------------------------------------------------------- #

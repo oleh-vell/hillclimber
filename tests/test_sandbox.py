@@ -27,9 +27,9 @@ import hillclimber  # noqa: F401
 from harnesses._proc import exec_agent
 from hillclimber.models import (
     DEFAULT_DENY_READ,
+    Cycle,
+    CycleStatus,
     PassthroughSandboxConfig,
-    Run,
-    RunStatus,
     Score,
     SeatbeltSandboxConfig,
 )
@@ -103,26 +103,26 @@ def test_new_experiment_id_is_prefixed_and_shaped():
 # --------------------------------------------------------------------------- #
 
 
-def _run() -> Run:
-    return Run(
+def _cycle() -> Cycle:
+    return Cycle(
         experiment_id="exp_a1b2c3d4",
-        cycle=1,
+        index=1,
         parent_ref="baseline",
         branch="hc/a1b2_cycle_001",
         worktree="hc_a1b2_cycle_001",
         hypothesis="try X",
         score_before=Score(value=0.5, passed=True, scorer_id="command"),
-        status=RunStatus.running,
+        status=CycleStatus.running,
     )
 
 
 def test_write_lock_round_trips(tmp_path: Path):
-    run = _run()
+    cycle = _cycle()
 
-    lock = asyncio.run(Strategy.write_lock(str(tmp_path), run))
+    lock = asyncio.run(Strategy.write_lock(str(tmp_path), cycle))
 
     assert Path(lock) == tmp_path / "cyc_001.lock"
-    assert Run.model_validate_json(Path(lock).read_text()) == run
+    assert Cycle.model_validate_json(Path(lock).read_text()) == cycle
 
 
 # --------------------------------------------------------------------------- #

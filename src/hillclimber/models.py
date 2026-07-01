@@ -3,11 +3,11 @@
 Three levels of types:
 
 - **Write models** (persisted, authoritative): ``Experiment`` -> ``hillclimber.toml``,
-  ``Run`` -> ``cyc_<NNN>.lock``.
+  ``Cycle`` -> ``cyc_<NNN>.lock``.
 - **Read model** (computed on demand, never stored): ``ExperimentStatus`` /
-  ``RunSummary``. Powers ``hillclimber status``. *Best-so-far* is computed here,
+  ``CycleSummary``. Powers ``hillclimber status``. *Best-so-far* is computed here,
   not persisted anywhere.
-- **Shared value types**: ``Agent``, ``Scorer``, ``Score``, ``RunStatus``, etc.
+- **Shared value types**: ``Agent``, ``Scorer``, ``Score``, ``CycleStatus``, etc.
 
 Convention: anything named ``...Status`` / ``...Summary`` is a read model — build
 it, print it, discard it. It must never gain a method that mutates or persists.
@@ -20,15 +20,15 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
-from hillclimber import prompt
+from strategies import prompt
 
 # --------------------------------------------------------------------------- #
 # Shared value types
 # --------------------------------------------------------------------------- #
 
 
-class RunStatus(StrEnum):
-    """Lifecycle of a single run."""
+class CycleStatus(StrEnum):
+    """Lifecycle of a single cycle."""
 
     running = "running"
     scored = "scored"
@@ -41,12 +41,12 @@ class Agent(BaseModel):
     """A reusable agent configuration. Three roles reference it (see AgentRoles).
 
     ``system_prompt`` is optional: when omitted from the config, ``Config`` fills
-    in the role default from ``hillclimber.prompt`` (see ``Config`` validator).
+    in the role default from ``strategies.prompt`` (see ``Config`` validator).
     """
 
     harness: str  # e.g. "claude_code", "api"
     model: str
-    system_prompt: str | None = None  # None -> role default from hillclimber.prompt
+    system_prompt: str | None = None  # None -> role default from strategies.prompt
     params: dict = Field(default_factory=dict)  # temperature, max tokens, etc.
 
     @model_validator(mode="before")
@@ -215,6 +215,10 @@ class Config(BaseModel):
     """The config. Describes what to do. Maps to ``hillclimber.toml``."""
 
     path_to_artefact: str
+    # The git ref the climb starts from: the baseline is scored at it and cycle 1
+    # forks from it. Empty/omitted -> the artefact's current ``HEAD`` (see
+    # ``Chain._prepare_repo`` / ``get_baseline_score``).
+    start_branch: str | None = None
     baseline_score: Score | None = None  # scored once, before any run
     scorer: Scorer  # the fitness function (v1: exactly one)
     # The OS sandbox that confines every agent CLI to its run's worktree. A
@@ -229,7 +233,7 @@ class Config(BaseModel):
 
     @model_validator(mode="after")
     def _fill_role_prompts(self) -> Config:
-        """Default each role's ``system_prompt`` from ``hillclimber.prompt``.
+        """Default each role's ``system_prompt`` from ``strategies.prompt``.
 
         Prompts are optional in the config (see ``Agent``): a role left without a
         ``system_prompt`` inherits the role default, while one set in the toml is
@@ -247,31 +251,31 @@ class Config(BaseModel):
         return self
 
 
-class Run(BaseModel):
-    """One hypothesis attempt in its own git worktree. Maps to ``cyc_<NNN>.lock``.
+class Cycle(BaseModel):
+    """One hypothesis iteration in its own git worktree. Maps to ``cyc_<NNN>.lock``.
 
-    A run belongs to an experiment (``experiment_id``, e.g. ``exp_a1b2c3d4``) and
-    is the ``cycle``-th attempt within it (1-based). The set of runs is just the
-    collection of these lock files on disk — there is no parent object holding
-    the list.
+    A cycle belongs to an experiment (``experiment_id``, e.g. ``exp_a1b2c3d4``)
+    and is the ``index``-th cycle within it (1-based). The set of cycles is just
+    the collection of these lock files on disk — there is no parent object
+    holding the list.
     """
 
     experiment_id: str  # e.g. exp_a1b2c3d4, minted once per experiment
-    cycle: int  # 1-based attempt number within the experiment
+    index: int  # 1-based cycle number within the experiment
     parent_ref: str  # baseline in v1; seam for later strategies
     branch: str  # the experiment branch
     worktree: str  # e.g. hc_a1b2_cycle_001/
-    hypothesis: str  # what this run tried (e.g. "Use pydantic...")
+    hypothesis: str  # what this cycle tried (e.g. "Use pydantic...")
     score_before: Score
     score_after: Score | None = None
     accepted: bool = False
-    status: RunStatus
+    status: CycleStatus
     commit_sha: str | None = None  # pointer to the actual change
 
     @property
     def cycle_id(self) -> str:
-        """Human-facing cycle label, e.g. ``cyc_001`` for ``cycle == 1``."""
-        return f"cyc_{self.cycle:03d}"
+        """Human-facing cycle label, e.g. ``cyc_001`` for ``index == 1``."""
+        return f"cyc_{self.index:03d}"
 
 
 # --------------------------------------------------------------------------- #
@@ -279,25 +283,25 @@ class Run(BaseModel):
 # --------------------------------------------------------------------------- #
 
 
-class RunSummary(BaseModel):
-    """A flattened, display-oriented view of a single run."""
+class CycleSummary(BaseModel):
+    """A flattened, display-oriented view of a single cycle."""
 
     experiment_id: str
     cycle_id: str  # e.g. cyc_001
-    status: RunStatus
+    status: CycleStatus
     score_after: Score | None = None
     accepted: bool
     delta: float  # score_after - baseline (computed)
 
 
 class ExperimentStatus(BaseModel):
-    """Assembled fresh by folding together the runs on disk. Powers
-    ``hillclimber status``. ``best`` is COMPUTED (``max(runs, key=score)``),
+    """Assembled fresh by folding together the cycles on disk. Powers
+    ``hillclimber status``. ``best`` is COMPUTED (``max(cycles, key=score)``),
     not persisted anywhere."""
 
     baseline_score: Score
-    runs: list[RunSummary]
-    best: RunSummary | None = None  # COMPUTED, not stored
+    cycles: list[CycleSummary]
+    best: CycleSummary | None = None  # COMPUTED, not stored
     in_progress: list[str] = Field(default_factory=list)  # cycle ids currently running
     completed: int
     total: int

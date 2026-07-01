@@ -142,6 +142,48 @@ def test_create_worktree_accepts_a_file_path(tmp_path: Path):
 
 
 # --------------------------------------------------------------------------- #
+# create_detached_worktree / remove_worktree
+# --------------------------------------------------------------------------- #
+
+
+def test_detached_worktree_checks_out_the_named_ref(tmp_path: Path):
+    # main holds "v1"; a second branch (the current HEAD) holds "v2".
+    _git("init", "-b", "main", cwd=tmp_path)
+    (tmp_path / "a.txt").write_text("v1\n")
+    _git("add", ".", cwd=tmp_path)
+    _git("commit", "-m", "v1", cwd=tmp_path)
+    _git("checkout", "-b", "wip", cwd=tmp_path)
+    (tmp_path / "a.txt").write_text("v2\n")
+    _git("add", ".", cwd=tmp_path)
+    _git("commit", "-m", "v2", cwd=tmp_path)
+
+    worktree = asyncio.run(git_utils.create_detached_worktree(str(tmp_path), "hc_baseline", "main"))
+
+    # Checked out at main's content (v1), not the current HEAD (wip/v2)...
+    assert Path(worktree) == tmp_path / ".hillclimber" / "hc_baseline"
+    assert (Path(worktree) / "a.txt").read_text() == "v1\n"
+    # ...and on no branch (detached) — it mints none.
+    out = subprocess.run(["git", "branch", "--list"], cwd=tmp_path, capture_output=True, text=True)
+    assert set(out.stdout.split()) <= {"*", "main", "wip"}
+
+
+def test_detached_worktree_raises_for_unknown_ref(tmp_path: Path):
+    _repo_with_one_commit(tmp_path)
+    with pytest.raises(RuntimeError):
+        asyncio.run(git_utils.create_detached_worktree(str(tmp_path), "hc_baseline", "no-such-branch"))
+
+
+def test_remove_worktree_tears_down_the_checkout(tmp_path: Path):
+    _repo_with_one_commit(tmp_path)
+    worktree = asyncio.run(git_utils.create_detached_worktree(str(tmp_path), "hc_baseline", "HEAD"))
+    assert Path(worktree).is_dir()
+
+    asyncio.run(git_utils.remove_worktree(str(tmp_path), "hc_baseline"))
+
+    assert not Path(worktree).exists()
+
+
+# --------------------------------------------------------------------------- #
 # head_sha / is_dirty / commit_all
 # --------------------------------------------------------------------------- #
 

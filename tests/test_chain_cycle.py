@@ -7,14 +7,16 @@ how its result is scored — is pinned without shelling out to a real CLI.
 """
 
 import asyncio
+from pathlib import Path
 
 import pytest
 
 import hillclimber  # noqa: F401  (initialise package before importing strategies)
 from harnesses import ClaudeHarness, Harness
 from harnesses.claude import HarnessRun
-from hillclimber.models import Budget, Config, Goal, Run, RunStatus, Score
+from hillclimber.models import Budget, Config, Cycle, CycleStatus, Goal, Score
 from sandboxes import PassthroughSandbox
+from strategies.base import CycleRecord
 from strategies.chain import Chain
 
 
@@ -45,16 +47,16 @@ def _config() -> Config:
     )
 
 
-def _run() -> Run:
-    return Run(
+def _cycle() -> Cycle:
+    return Cycle(
         experiment_id="exp_a1b2c3d4",
-        cycle=1,
+        index=1,
         parent_ref="baseline",
         branch="hc/a1b2_cycle_001",
         worktree="hc_a1b2_cycle_001",
         hypothesis="try X",
         score_before=Score(value=0.5, passed=True, scorer_id="command"),
-        status=RunStatus.running,
+        status=CycleStatus.running,
     )
 
 
@@ -77,13 +79,44 @@ def test_propose_hypothesis_runs_the_agent_through_the_harness():
     assert call.system_prompt  # the role default, filled in by Config
 
 
+def test_propose_hypothesis_feeds_past_attempts_into_the_prompt():
+    chain = Chain(PassthroughSandbox())
+    fake = _RecordingHarness()
+    chain.harness = fake
+    # Seed the memory the way one_cycle does: two prior hypotheses, one that
+    # helped and one that hurt.
+    chain._cycle_records().append(CycleRecord(hypothesis="add caching", before=0.50, after=0.60))
+    chain._cycle_records().append(CycleRecord(hypothesis="drop validation", before=0.60, after=0.55))
+
+    asyncio.run(chain._propose_hypothesis(_config(), "hc_a1b2_cycle_001"))
+
+    prompt = fake.calls[0].prompt
+    # Both past hypotheses and their score movement are surfaced to the proposer.
+    assert "add caching" in prompt
+    assert "raised the score 0.500 -> 0.600 (+0.100)" in prompt
+    assert "drop validation" in prompt
+    assert "lowered the score 0.600 -> 0.550 (-0.050)" in prompt
+    assert "Do not repeat" in prompt
+
+
+def test_propose_hypothesis_omits_history_on_the_first_cycle():
+    chain = Chain(PassthroughSandbox())
+    fake = _RecordingHarness()
+    chain.harness = fake
+
+    asyncio.run(chain._propose_hypothesis(_config(), "hc_a1b2_cycle_001"))
+
+    # No attempts yet -> no "we already tried" block, just the bare task.
+    assert "already tried" not in fake.calls[0].prompt
+
+
 def test_apply_hypothesis_runs_the_worker_and_asks_for_a_commit():
     chain = Chain(PassthroughSandbox())
     fake = _RecordingHarness()
     chain.harness = fake
-    run = _run()
+    cycle = _cycle()
 
-    result = asyncio.run(chain._apply_hypothesis(_config(), run, "hc_a1b2_cycle_001"))
+    result = asyncio.run(chain._apply_hypothesis(_config(), cycle, "hc_a1b2_cycle_001"))
 
     # _apply_hypothesis only drives the worker — scoring is read from the commit
     # by one_cycle, so it returns nothing.
@@ -94,7 +127,7 @@ def test_apply_hypothesis_runs_the_worker_and_asks_for_a_commit():
     assert call.path == "hc_a1b2_cycle_001"
     assert call.model == "claude-opus-4-8"
     assert call.system_prompt  # the worker role default, filled in by Config
-    assert run.hypothesis in call.prompt
+    assert cycle.hypothesis in call.prompt
     assert "commit" in call.prompt.lower()
 
 
@@ -120,22 +153,22 @@ class _StubChain(Chain):
         self,
         config: Config,
         experiment_id: str,
-        cycle: int,
+        index: int,
         parent_ref: str,
         parent_score: Score,
-    ) -> Run:
-        self.cycles_run.append((experiment_id, cycle, parent_ref))
-        value = self._scores[cycle - 1]
-        return Run(
+    ) -> Cycle:
+        self.cycles_run.append((experiment_id, index, parent_ref))
+        value = self._scores[index - 1]
+        return Cycle(
             experiment_id=experiment_id,
-            cycle=cycle,
+            index=index,
             parent_ref=parent_ref,
-            branch=f"hc/x_cycle_{cycle:03d}",
-            worktree=f"hc_x_cycle_{cycle:03d}",
+            branch=f"hc/x_cycle_{index:03d}",
+            worktree=f"hc_x_cycle_{index:03d}",
             hypothesis="stub",
             score_before=parent_score,
             score_after=Score(value=value, passed=True, scorer_id="command"),
-            status=RunStatus.scored,
+            status=CycleStatus.scored,
         )
 
 
@@ -156,8 +189,8 @@ def test_execute_runs_until_budget_exhausted():
 
     assert status.completed == 3
     assert status.total == 3
-    assert len(status.runs) == 3
-    # best is the strongest run (cycle 2 at 0.7), not merely the last.
+    assert len(status.cycles) == 3
+    # best is the strongest cycle (cycle 2 at 0.7), not merely the last.
     assert status.best is not None
     assert status.best.cycle_id == "cyc_002"
     assert status.best.score_after is not None
@@ -182,7 +215,7 @@ def test_execute_mints_one_experiment_id_and_numbers_cycles():
     exp_ids = {exp_id for exp_id, _, _ in chain.cycles_run}
     assert len(exp_ids) == 1  # one id for the whole experiment
     assert next(iter(exp_ids)).startswith("exp_")
-    assert [cycle for _, cycle, _ in chain.cycles_run] == [1, 2]  # 1-based, sequential
+    assert [index for _, index, _ in chain.cycles_run] == [1, 2]  # 1-based, sequential
 
 
 def test_execute_stops_early_when_goal_is_met():
@@ -199,7 +232,7 @@ def test_execute_runs_nothing_when_budget_is_zero():
     status = asyncio.run(chain.execute(_exec_config(cycles=0), _baseline()))
 
     assert status.completed == 0
-    assert status.runs == []
+    assert status.cycles == []
     assert status.best is None
     assert chain.cycles_run == []
 
@@ -216,8 +249,26 @@ def test_execute_best_is_the_top_run_even_below_baseline():
     chain = _StubChain([0.3, 0.4, 0.2])
     status = asyncio.run(chain.execute(_exec_config(cycles=3), _baseline(0.5)))
 
-    # No run beats the baseline, but best is still the strongest run (cycle 2).
+    # No cycle beats the baseline, but best is still the strongest cycle (cycle 2).
     assert status.completed == 3
     assert status.best is not None
     assert status.best.cycle_id == "cyc_002"
     assert status.best.delta == pytest.approx(-0.1)
+
+
+# --------------------------------------------------------------------------- #
+# _prepare_repo (start ref resolution)
+# --------------------------------------------------------------------------- #
+
+
+def test_prepare_repo_resolves_the_start_ref(tmp_path: Path):
+    chain = Chain(PassthroughSandbox())
+    config = _config()
+    config.path_to_artefact = str(tmp_path)
+
+    # Default: the first cycle forks from HEAD.
+    assert asyncio.run(chain._prepare_repo(config)) == "HEAD"
+
+    # An explicit start_branch is used verbatim as the fork ref.
+    config.start_branch = "main"
+    assert asyncio.run(chain._prepare_repo(config)) == "main"

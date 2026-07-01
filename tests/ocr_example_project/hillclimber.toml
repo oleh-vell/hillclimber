@@ -1,5 +1,8 @@
 path_to_artefact = "."
 strategy = "chain"
+# Ref the climb starts from (baseline scored at it, cycle 1 forks from it).
+# Omit or leave empty to start from the artefact's current HEAD.
+# start_branch = "main"
 
 # Fitness function: run the eval, whose evaluate() returns a hillclimber.Eval.
 [scorer]

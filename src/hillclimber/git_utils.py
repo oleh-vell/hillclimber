@@ -124,9 +124,9 @@ async def check_or_init_git(path: str) -> bool:
 
 
 async def create_worktree(path: str, name: str, branch: str, base_ref: str) -> str:
-    """Create an isolated git worktree for a run.
+    """Create an isolated git worktree for a cycle.
 
-    Each run gets its own checkout (see ``Run.worktree``) so hypotheses are
+    Each cycle gets its own checkout (see ``Cycle.worktree``) so hypotheses are
     applied in isolation and never touch the artefact's working tree. The
     worktree lives under the repo's ``.hillclimber`` directory (alongside the
     workspaces, never clobbering the artefact), on a new ``branch`` forked from
@@ -164,6 +164,56 @@ async def create_worktree(path: str, name: str, branch: str, base_ref: str) -> s
     if proc.returncode != 0:
         raise RuntimeError(f"git worktree add failed in {repo}: {stderr.decode().strip()}")
     return str(worktree)
+
+
+async def create_detached_worktree(path: str, name: str, ref: str) -> str:
+    """Check out ``ref`` in a throwaway worktree, detached (no new branch).
+
+    Unlike :func:`create_worktree`, this mints no branch — it is for reading a
+    committed state (e.g. scoring the baseline at the start ref) rather than
+    building on it. Pair it with :func:`remove_worktree` to clean up once scored.
+
+    Args:
+        path: A directory or file inside the artefact repo; its root is used.
+        name: The worktree directory name (under ``.hillclimber``).
+        ref: The git ref to check out (e.g. ``main``, a branch, or a sha).
+
+    Returns:
+        The absolute path to the created worktree (``<repo>/.hillclimber/<name>``).
+
+    Raises:
+        FileNotFoundError: If ``path`` does not exist.
+        RuntimeError: If ``git worktree add`` fails (e.g. ``ref`` does not exist).
+    """
+    repo = _repo_root(path)
+    worktree = repo / ".hillclimber" / name
+    logger.debug("creating detached worktree %s at %s", worktree, ref)
+    rc, stderr = await _git(repo, "worktree", "add", "--detach", str(worktree), ref)
+    if rc != 0:
+        raise RuntimeError(f"git worktree add failed in {repo}: {stderr}")
+    return str(worktree)
+
+
+async def remove_worktree(path: str, name: str) -> None:
+    """Remove the worktree ``name`` under the repo's ``.hillclimber`` directory.
+
+    The counterpart to :func:`create_detached_worktree`. ``--force`` is used so a
+    scored (and thus possibly dirtied) checkout is torn down rather than left to
+    litter ``.hillclimber``.
+
+    Args:
+        path: A directory or file inside the artefact repo; its root is used.
+        name: The worktree directory name to remove.
+
+    Raises:
+        FileNotFoundError: If ``path`` does not exist.
+        RuntimeError: If ``git worktree remove`` fails.
+    """
+    repo = _repo_root(path)
+    worktree = repo / ".hillclimber" / name
+    rc, stderr = await _git(repo, "worktree", "remove", "--force", str(worktree))
+    if rc != 0:
+        raise RuntimeError(f"git worktree remove failed in {repo}: {stderr}")
 
 
 async def head_sha(worktree: str) -> str:

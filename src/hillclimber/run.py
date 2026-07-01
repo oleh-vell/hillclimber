@@ -14,7 +14,12 @@ from __future__ import annotations
 from pathlib import Path
 
 from hillclimber.config import load_config
-from hillclimber.git_utils import check_uncommitted_changes
+from hillclimber.git_utils import (
+    check_or_init_git,
+    check_uncommitted_changes,
+    create_detached_worktree,
+    remove_worktree,
+)
 from hillclimber.models import Config, ExperimentStatus, Score
 from hillclimber.scoring import score_artefact
 from hillclimber.telemetry import get_logger
@@ -22,6 +27,10 @@ from sandboxes import get_sandbox
 from strategies.chain import Chain
 
 logger = get_logger(__name__)
+
+# Name of the throwaway worktree used to score the baseline at an explicit
+# ``start_branch`` (see ``get_baseline_score``).
+_BASELINE_WORKTREE = "hc_baseline"
 
 
 async def run(path: str | Path) -> ExperimentStatus:
@@ -73,9 +82,19 @@ async def get_baseline_score(config: Config) -> Score:
     climbable value. A command that fails to run (non-zero exit) scores ``0.0``.
     This baseline is the number later cycles must beat.
 
+    Where the baseline is scored tracks where cycle 1 forks from (see
+    ``Chain._prepare_repo``), so the two measure the same code:
+
+    - No ``start_branch`` (the default): score the working tree in place. The
+        runner has already refused to start on a dirty tree, so this is the same
+        committed state cycle 1 forks from (``HEAD``).
+    - An explicit ``start_branch``: score a throwaway checkout of that ref, since
+        it may differ from the working tree. The checkout is torn down after.
+
     Args:
         config: The validated experiment config. ``config.scorer`` drives the
-            scoring; ``config.path_to_artefact`` is the working directory.
+            scoring; ``config.path_to_artefact`` is the artefact repo and
+            ``config.start_branch`` the ref to score at (if any).
 
     Returns:
         The baseline ``Score`` — ``Eval.score`` as ``value`` when the command
@@ -84,7 +103,17 @@ async def get_baseline_score(config: Config) -> Score:
     Raises:
         ValueError: If the command ran but emitted no parseable ``Eval`` JSON.
     """
-    score = await score_artefact(config.scorer, config.path_to_artefact)
+    if config.start_branch:
+        # Score committed state at the start ref, isolated in a throwaway
+        # checkout so it can differ from the working tree without touching it.
+        await check_or_init_git(config.path_to_artefact)
+        worktree = await create_detached_worktree(config.path_to_artefact, _BASELINE_WORKTREE, config.start_branch)
+        try:
+            score = await score_artefact(config.scorer, worktree)
+        finally:
+            await remove_worktree(config.path_to_artefact, _BASELINE_WORKTREE)
+    else:
+        score = await score_artefact(config.scorer, config.path_to_artefact)
     if score.passed:
         logger.info("baseline scored: %.3f", score.value)
     return score
