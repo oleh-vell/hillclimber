@@ -18,9 +18,10 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
 
-from harnesses import Harness, get_harness
+from harnesses import Harness, TraceEvent, TraceSink, get_harness
 from hillclimber.git_utils import commit_all, head_sha, is_dirty
 from hillclimber.models import Config, Cycle, ExperimentStatus, Score
+from hillclimber.progress import RunEventSink, ignore_progress
 from hillclimber.telemetry import get_logger
 from sandboxes.base import Sandbox
 
@@ -29,6 +30,17 @@ logger = get_logger(__name__)
 # v1 drives every agent through the Claude harness. Per-agent harness selection
 # (from ``Agent.harness``) is a later refinement; for now the strategy holds one.
 DEFAULT_HARNESS = "claude"
+
+
+def log_trace(event: TraceEvent) -> None:
+    """The default trace sink: one log line per agent step.
+
+    Where agent traces land when no other sink is injected (see
+    ``Strategy.__init__``) — the run narrates itself through the ordinary
+    logging setup. A consumer wanting richer display (the CLI's live view)
+    passes its own ``TraceSink`` instead; nothing else changes.
+    """
+    logger.info("[%s] %s: %s", event.label or "agent", event.kind, event.summary)
 
 
 @dataclass(frozen=True)
@@ -50,12 +62,25 @@ class CycleRecord:
 class Strategy(ABC):
     """Base class for climb strategies."""
 
-    def __init__(self, sandbox: Sandbox) -> None:
+    def __init__(
+        self,
+        sandbox: Sandbox,
+        trace_sink: TraceSink | None = None,
+        progress_sink: RunEventSink | None = None,
+    ) -> None:
         self._state = {}
         # Held for future per-``Agent.harness`` selection, which will need to
         # build other harnesses with the same confinement policy.
         self.sandbox = sandbox
         self.harness: Harness = get_harness(DEFAULT_HARNESS, sandbox)
+        # Where this strategy's agent traces land: the injected sink (the CLI's
+        # live view, later) or the logging default. Strategies don't call this
+        # directly — they wrap it per agent run via ``_make_trace_sink``.
+        self.trace_sink: TraceSink = trace_sink if trace_sink is not None else log_trace
+        # Where run-level milestones land (cycle started/staged/scored — see
+        # ``hillclimber.progress``). Silent by default: the logs already narrate
+        # every milestone, so only an injected consumer (the CLI dashboard) taps in.
+        self.progress_sink: RunEventSink = progress_sink if progress_sink is not None else ignore_progress
 
     @staticmethod
     async def create_workspace(path: str, workspace_name: str) -> str:
@@ -116,6 +141,23 @@ class Strategy(ABC):
         await asyncio.to_thread(lock.write_text, cycle.model_dump_json(indent=2))
         return str(lock)
 
+    def _make_trace_sink(self, label: str) -> TraceSink:
+        """Return a sink that stamps ``label`` onto each event and forwards it.
+
+        The harness emits anonymous trace events; the strategy is the layer that
+        knows *who* is running (which cycle, which role), so it stamps that
+        context here before events reach ``self.trace_sink``. A consumer then
+        renders "cycle 003/worker opened a file" without parsing anything.
+
+        Args:
+            label: The runner's identity, e.g. ``"cycle 003/worker"``.
+        """
+
+        def sink(event: TraceEvent) -> None:
+            self.trace_sink(event.model_copy(update={"label": label}))
+
+        return sink
+
     def _cycle_records(self) -> list[CycleRecord]:
         """The strategy's memory of past cycles, kept in ``self._state``.
 
@@ -128,11 +170,12 @@ class Strategy(ABC):
         return records
 
     async def _commit_cycle(self, worktree: str, base_sha: str, index: int) -> str:
-        """Ensure the worker's change is committed; return the cycle's commit sha.
+        """Commit the worker's change; return the cycle's commit sha.
 
-        The worker is asked to commit its own change (see ``_apply_hypothesis``).
-        This verifies it did: any uncommitted leftovers are committed on its behalf
-        so the cycle's result is a clean commit — the score is read from it and the
+        The sandbox denies the worker git access (a worktree's metadata lives in
+        the parent repo, outside the sandbox boundary), so the worker only edits
+        and committing is the runner's job — this method runs outside the
+        sandbox. The result is a clean commit: the score is read from it and the
         next cycle forks from it. A cycle that produced no new commit at all (no
         change applied) is logged but not an error.
 
@@ -145,7 +188,7 @@ class Strategy(ABC):
             The sha of this cycle's resulting commit.
         """
         if await is_dirty(worktree):
-            logger.warning("cycle %d: worker left uncommitted changes; committing them", index)
+            logger.info("cycle %d: committing the worker's edits", index)
             await commit_all(worktree, f"hillclimber: cycle {index:03d}")
         sha = await head_sha(worktree)
         if sha == base_sha:

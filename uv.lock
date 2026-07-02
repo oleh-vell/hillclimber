@@ -2,6 +2,12 @@ version = 1
 revision = 2
 requires-python = ">=3.12"
 
+[manifest]
+members = [
+    "hillclimber",
+    "ocr-example-project",
+]
+
 [[package]]
 name = "annotated-doc"
 version = "0.0.4"
@@ -302,6 +308,17 @@ sdist = { url = "https://files.pythonhosted.org/packages/c8/88/960acba5e95998b4a
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e0/31/472fa3c766aa9b7869dceb6804344cc9945115ae2ee871258b404d0e7c84/mistralai-2.5.0-py3-none-any.whl", hash = "sha256:f29813f1c2e4c19d24707cb5f74ea5c071d106fcaa84dd856a7e4f2d36d908b2", size = 1216614, upload-time = "2026-06-23T17:05:20.819Z" },
 ]
+
+[[package]]
+name = "ocr-example-project"
+version = "0.1.0"
+source = { virtual = "tests/ocr_example_project" }
+dependencies = [
+    { name = "mistralai" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "mistralai" }]
 
 [[package]]
 name = "opentelemetry-api"

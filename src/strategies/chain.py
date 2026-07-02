@@ -11,6 +11,7 @@ from __future__ import annotations
 from harnesses.claude import HarnessRun
 from hillclimber.git_utils import check_or_init_git, create_worktree, head_sha
 from hillclimber.models import Config, Cycle, CycleStatus, CycleSummary, ExperimentStatus, Score
+from hillclimber.progress import RunEvent
 from hillclimber.scoring import score_artefact
 from hillclimber.telemetry import get_logger
 from strategies.base import CycleRecord, Strategy
@@ -33,9 +34,9 @@ class Chain(Strategy):
 
         One cycle is one hypothesis iteration in its own worktree (see ``Cycle``):
         branch off the parent, ask the hillclimber agent for a hypothesis, record
-        it in a ``.lock``, let the worker agent apply *and commit* it in a fresh
-        context, verify the commit, then score that committed result and fold it
-        back into the lock.
+        it in a ``.lock``, let the worker agent apply it in a fresh context,
+        commit the worker's edits (the sandboxed worker cannot run git itself),
+        then score that committed result and fold it back into the lock.
 
         The score is read from the cycle's own commit, not the artefact's ``HEAD``:
         the worktree is the cycle's checkout, the worker commits its change there,
@@ -68,7 +69,7 @@ class Chain(Strategy):
         base_sha = await head_sha(worktree)
 
         # 2. Ask the hillclimber agent for one hypothesis. [HARNESS SEAM]
-        hypothesis = await self._propose_hypothesis(config, worktree)
+        hypothesis = await self._propose_hypothesis(config, worktree, index)
         logger.debug("cycle %d: hypothesis: %s", index, hypothesis)
 
         # 3. Record the running cycle in its lock: hypothesis, parent, score_before.
@@ -84,15 +85,24 @@ class Chain(Strategy):
         )
         await self.write_lock(worktree, cycle)
 
-        # 4. Worker applies the hypothesis and commits it in a fresh context.
-        #    [HARNESS SEAM]
+        # 4. Worker applies the hypothesis in a fresh context. [HARNESS SEAM]
         await self._apply_hypothesis(config, cycle, worktree)
 
-        # 5. Verify the worker committed (backstop a forgotten commit), and record
-        #    the commit the score is read from.
+        # 5. Commit the worker's edits (the sandbox denies the worker git, so
+        #    committing is the runner's job) and record the commit the score is
+        #    read from.
         cycle.commit_sha = await self._commit_cycle(worktree, base_sha, index)
 
         # 6. Score this cycle's committed result.
+        self.progress_sink(
+            RunEvent(
+                kind="cycle_stage",
+                message="scoring the change",
+                index=index,
+                total=config.budget.cycles,
+                stage="scoring",
+            )
+        )
         cycle.score_after = await score_artefact(config.scorer, worktree)
         cycle.status = CycleStatus.scored
         logger.info(
@@ -110,7 +120,7 @@ class Chain(Strategy):
         await self.write_lock(worktree, cycle)
         return cycle
 
-    async def _propose_hypothesis(self, config: Config, worktree: str) -> str:
+    async def _propose_hypothesis(self, config: Config, worktree: str, index: int) -> str:
         """Ask the hillclimber agent for one hypothesis, via the harness.
 
         Drives ``config.hillclimber_agent`` (its model and system prompt) against
@@ -118,13 +128,15 @@ class Chain(Strategy):
         the proposed change as text. The prompt is primed with the experiment's
         past cycles (see ``_cycle_records`` / ``_render_history``) so each
         hypothesis builds on what earlier cycles already learned rather than
-        restating it. v1 always routes through the Claude harness (see
-        ``Strategy.__init__``); selecting the harness per ``Agent.harness`` is a
-        later refinement.
+        restating it. The agent's progress streams into the strategy's trace
+        sink, labelled with the cycle and role (see ``_make_trace_sink``). v1
+        always routes through the Claude harness (see ``Strategy.__init__``);
+        selecting the harness per ``Agent.harness`` is a later refinement.
 
         Args:
             config: The validated experiment config.
             worktree: The cycle's checkout the agent inspects and reasons over.
+            index: The 1-based cycle number, stamped onto the trace label.
 
         Returns:
             The proposed hypothesis as plain text.
@@ -135,6 +147,15 @@ class Chain(Strategy):
         if agent.system_prompt is None:
             raise RuntimeError("hillclimber agent is missing a system prompt")
 
+        self.progress_sink(
+            RunEvent(
+                kind="cycle_stage",
+                message="proposing a hypothesis",
+                index=index,
+                total=config.budget.cycles,
+                stage="proposing",
+            )
+        )
         task = (
             "Inspect the artefact in this directory and how it is scored, then "
             "propose exactly one concrete, testable change that should raise the "
@@ -148,18 +169,24 @@ class Chain(Strategy):
                 prompt=task,
                 path=worktree,
                 model=agent.model,
-            )
+            ),
+            on_trace=self._make_trace_sink(f"cycle {index:03d}/hillclimber"),
         )
 
     async def _apply_hypothesis(self, config: Config, cycle: Cycle, worktree: str) -> None:
-        """Run the worker agent to apply ``cycle.hypothesis`` and commit it.
+        """Run the worker agent to apply ``cycle.hypothesis``.
 
         Drives ``config.worker_agent`` (its model and system prompt) in a fresh
         context through ``self.harness`` to apply ``cycle.hypothesis`` inside
-        ``worktree`` and commit it with git. The worker is handed only the
+        ``worktree``. The worker only edits — the sandbox denies it git (the
+        worktree's metadata lives in the parent repo, outside the boundary), so
+        ``one_cycle`` commits its edits afterwards via ``_commit_cycle``, outside
+        the sandbox. The worker is handed only the
         hypothesis as its task — a fresh context with no memory of how it was
-        proposed (the proposer/worker split). v1 always routes through the Claude
-        harness (see ``Strategy.__init__``).
+        proposed (the proposer/worker split). Its progress streams into the
+        strategy's trace sink, labelled with the cycle and role (see
+        ``_make_trace_sink``). v1 always routes through the Claude harness (see
+        ``Strategy.__init__``).
 
         Scoring is *not* done here: it is read from the resulting commit by
         ``one_cycle`` (see ``_commit_cycle`` / ``score_artefact``), so the worker
@@ -177,10 +204,21 @@ class Chain(Strategy):
         if agent.system_prompt is None:
             raise RuntimeError("worker agent is missing a system prompt")
 
+        self.progress_sink(
+            RunEvent(
+                kind="cycle_stage",
+                message="applying the hypothesis",
+                index=cycle.index,
+                total=config.budget.cycles,
+                stage="applying",
+                hypothesis=cycle.hypothesis,
+            )
+        )
         task = (
             "Apply exactly this one change to the artefact in this directory, and "
-            "make no other changes. When done, commit it with git: stage your edits "
-            "and run `git commit`. Do not run the tests or eval.\n\n"
+            "make no other changes. Edit the files directly and stop when the "
+            "change is complete — do not commit (git is unavailable here; the "
+            "runner commits your edits). Do not run the tests or eval.\n\n"
             f"{cycle.hypothesis}"
         )
         await self.harness.run(
@@ -189,7 +227,8 @@ class Chain(Strategy):
                 prompt=task,
                 path=worktree,
                 model=agent.model,
-            )
+            ),
+            on_trace=self._make_trace_sink(f"cycle {cycle.index:03d}/worker"),
         )
 
     async def execute(self, config: Config, baseline: Score) -> ExperimentStatus:
@@ -232,14 +271,24 @@ class Chain(Strategy):
         completed = 0
 
         while not config.goal.is_met(peak_score) and not config.budget.is_exhausted(completed):
+            index = completed + 1
+            self.progress_sink(
+                RunEvent(
+                    kind="cycle_start",
+                    message=f"cycle {index}/{config.budget.cycles} starting",
+                    index=index,
+                    total=config.budget.cycles,
+                )
+            )
             cycle = await self.one_cycle(
                 config,
                 experiment_id,
-                index=completed + 1,
+                index=index,
                 parent_ref=parent_ref,
                 parent_score=parent_score,
             )
             completed += 1
+            self.progress_sink(self._cycle_done_event(cycle, config.budget.cycles))
 
             summary = self._summarize(cycle, baseline)
             cycles.append(summary)
@@ -289,6 +338,33 @@ class Chain(Strategy):
         return config.start_branch or "HEAD"
 
     @staticmethod
+    def _cycle_done_event(cycle: Cycle, total: int) -> RunEvent:
+        """Build the ``cycle_done`` progress event for a completed ``cycle``.
+
+        ``delta`` is the movement against the cycle's *parent* (``score_before``)
+        — "did this step of the chain climb" — not against the baseline, which a
+        consumer can derive itself from the scores it has seen.
+        """
+        after = cycle.score_after
+        if after is None:
+            return RunEvent(
+                kind="cycle_done",
+                message=f"cycle {cycle.index} produced no score",
+                index=cycle.index,
+                total=total,
+                hypothesis=cycle.hypothesis,
+            )
+        return RunEvent(
+            kind="cycle_done",
+            message=f"cycle {cycle.index} scored {after.value:.3f}",
+            index=cycle.index,
+            total=total,
+            score=after.value,
+            delta=after.value - cycle.score_before.value,
+            hypothesis=cycle.hypothesis,
+        )
+
+    @staticmethod
     def _summarize(cycle: Cycle, baseline: Score) -> CycleSummary:
         """Flatten a completed ``cycle`` into a display ``CycleSummary``.
 
@@ -301,6 +377,7 @@ class Chain(Strategy):
             experiment_id=cycle.experiment_id,
             cycle_id=cycle.cycle_id,
             status=cycle.status,
+            hypothesis=cycle.hypothesis,
             score_after=after,
             accepted=cycle.accepted,
             delta=delta,

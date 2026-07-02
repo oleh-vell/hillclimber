@@ -70,3 +70,8 @@ root = ["./src", "./tests", "./test_projects/slow_stats"]  # each test project d
 [tool.ty.rules]
 # Surface implicit/missing annotations as errors rather than warnings.
 possibly-unresolved-reference = "error"
+
+[tool.uv.workspace]
+members = [
+    "tests/ocr_example_project",
+]

@@ -16,18 +16,24 @@ maps a config to a concrete backend, mirroring ``harnesses.get_harness``.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 
 
 class Sandbox(ABC):
     """Wraps a child argv so it runs confined to a per-run worktree."""
 
     @abstractmethod
-    def wrap(self, argv: list[str], workdir: str) -> list[str]:
+    def wrap(self, argv: list[str], workdir: str, write_allow: Sequence[str] = ()) -> list[str]:
         """Return ``argv`` rewritten to run under the sandbox, confined to ``workdir``.
 
         Args:
             argv: The child command to run (e.g. the full ``claude ...`` argv).
             workdir: The per-run worktree the child is confined to.
+            write_allow: Extra directories (``~``-relative allowed) the child may
+                write beyond the worktree — a harness's declared runtime-state
+                dirs (see ``Harness.write_allow``), e.g. where its backend CLI
+                keeps per-session scratch. Backends that confine writes re-allow
+                exactly these; backends without write confinement ignore them.
 
         Returns:
             A new argv that runs ``argv`` under the sandbox.

@@ -5,7 +5,8 @@ from pathlib import Path
 import pytest
 
 import hillclimber
-from hillclimber import Config, ScorerError, get_baseline_score
+from harnesses import ClaudeHarness
+from hillclimber import Config, RunEvent, ScorerError, get_baseline_score
 from hillclimber.models import Agent, Budget, CommandScorer
 
 PROJECT_FOLDERS = Path(__file__).parent / "example_project_folders"
@@ -32,7 +33,7 @@ def test_baseline_score_reads_the_eval_score():
     config = _config(EXAMPLE_PROJECT)
     # The scorer emits its Eval as JSON; the runner reads score off that, not
     # the exit code, so a partial score comes through verbatim.
-    config.scorer = CommandScorer(cmd="""echo '{"score": 0.42}'""")
+    config.scorer = CommandScorer(cmd="""echo '{"hillclimber_eval": 1, "score": 0.42}'""")
     score = asyncio.run(get_baseline_score(config))
     assert score.passed
     assert score.value == 0.42
@@ -43,7 +44,7 @@ def test_baseline_score_takes_the_last_eval_line():
     config = _config(EXAMPLE_PROJECT)
     # Noise before the Eval JSON (e.g. pipeline chatter) is ignored: the last
     # parseable Eval on stdout wins.
-    config.scorer = CommandScorer(cmd="""printf 'loading...\\n{"score": 0.9}\\n'""")
+    config.scorer = CommandScorer(cmd="""printf 'loading...\\n{"hillclimber_eval": 1, "score": 0.9}\\n'""")
     score = asyncio.run(get_baseline_score(config))
     assert score.value == 0.9
 
@@ -68,11 +69,11 @@ def test_baseline_score_raises_when_no_eval_emitted():
 def test_baseline_score_uses_start_branch_when_set(tmp_path: Path):
     # main holds score 0.7; the current branch (wip) holds a different score.
     _git("init", "-b", "main", cwd=tmp_path)
-    (tmp_path / "score.json").write_text('{"score": 0.7}\n')
+    (tmp_path / "score.json").write_text('{"hillclimber_eval": 1, "score": 0.7}\n')
     _git("add", "-A", cwd=tmp_path)
     _git("commit", "-m", "main", cwd=tmp_path)
     _git("checkout", "-b", "wip", cwd=tmp_path)
-    (tmp_path / "score.json").write_text('{"score": 0.1}\n')
+    (tmp_path / "score.json").write_text('{"hillclimber_eval": 1, "score": 0.1}\n')
     _git("add", "-A", cwd=tmp_path)
     _git("commit", "-m", "wip", cwd=tmp_path)
 
@@ -147,3 +148,51 @@ def test_run_snapshots_a_dirty_artefact_when_auto_commit_set(tmp_path: Path):
     # NotImplementedError rather than the refusal — the run took the opt-in branch.
     with pytest.raises(NotImplementedError, match="not implemented"):
         asyncio.run(hillclimber.run(tmp_path))
+
+
+# --------------------------------------------------------------------------- #
+# run: progress events
+# --------------------------------------------------------------------------- #
+
+# A config whose scorer emits a fixed Eval, with a zero-cycle budget so run()
+# goes baseline -> preflight -> (no cycles) without touching a harness for real.
+_PROGRESS_TOML = """\
+[scorer]
+kind = "command"
+cmd = "echo '{\\"hillclimber_eval\\": 1, \\"score\\": 0.42}'"
+[budget]
+cycles = 0
+[sandbox]
+kind = "none"
+[hillclimber_agent]
+harness = "claude"
+model = "m"
+[worker_agent]
+harness = "claude"
+model = "m"
+[reflector_agent]
+harness = "claude"
+model = "m"
+"""
+
+
+def test_run_emits_baseline_and_preflight_progress_events(tmp_path: Path, monkeypatch):
+    _git("init", cwd=tmp_path)
+    (tmp_path / "hillclimber.toml").write_text(_PROGRESS_TOML)
+    _git("add", "-A", cwd=tmp_path)
+    _git("commit", "-m", "init", cwd=tmp_path)
+
+    # The preflight is a real CLI round-trip; stub it so the test proves the
+    # events around it, not the claude binary.
+    async def _verified(self: ClaudeHarness, model: str) -> None:
+        return None
+
+    monkeypatch.setattr(ClaudeHarness, "verify_model", _verified)
+
+    events: list[RunEvent] = []
+    status = asyncio.run(hillclimber.run(tmp_path, progress_sink=events.append))
+
+    assert [e.kind for e in events] == ["baseline_start", "baseline_done", "preflight_start", "preflight_done"]
+    baseline_done = events[1]
+    assert baseline_done.score == pytest.approx(0.42)
+    assert status.completed == 0

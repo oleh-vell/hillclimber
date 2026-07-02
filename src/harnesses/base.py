@@ -7,17 +7,53 @@ back the agent's final reply. Strategies hold a pluggable ``self.harness`` (see
 agent; ``get_harness`` (see ``harnesses.__init__``) maps a name to a concrete one.
 
 ``HarnessRun`` (defined alongside the Claude harness) is the call payload shared
-by every harness; concrete harnesses implement :meth:`Harness.run`.
+by every harness; concrete harnesses implement :meth:`Harness.run`. While an
+agent runs, the harness narrates its progress as :class:`TraceEvent`\\ s pushed
+into an optional :data:`TraceSink` — the shared vocabulary that lets one
+consumer (a logger today, the CLI's live view later) render any backend's run.
 """
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any, Literal
+
+from pydantic import BaseModel
 
 if TYPE_CHECKING:
     from harnesses.claude import HarnessRun
     from hillclimber.models import Config
+
+
+class TraceEvent(BaseModel):
+    """One step of a running agent, normalized across harnesses.
+
+    Every harness translates its backend-specific stream into this small shared
+    vocabulary, so a consumer written once (the logging sink in
+    ``strategies.base``, the CLI's live view later) renders any backend's run.
+    The ``kind``s are deliberately few — what a reader of the run needs to see:
+
+    - ``init``: the session started (model, tools).
+    - ``thinking`` / ``text``: the agent reasoning or speaking.
+    - ``tool_use`` / ``tool_result``: the agent acting (opening files, running
+      commands) and what came back.
+    - ``result``: the run finished; the final reply.
+
+    Anything backend-specific survives untouched in ``raw`` for richer
+    rendering later; ``summary`` is the one-line human-readable fallback.
+    """
+
+    kind: Literal["init", "thinking", "text", "tool_use", "tool_result", "result"]
+    summary: str  # one human-readable line, e.g. "Read(src/pipeline.py)"
+    raw: dict[str, Any]  # the untouched backend payload behind this event
+    label: str | None = None  # who is running, stamped by the strategy (e.g. "cycle 003/worker")
+
+
+# Where trace events land. Deliberately a *sync* callable — a sink forwards
+# (logs a line, put_nowait's onto a queue) and must never block the harness's
+# stream-reading loop. ``None`` everywhere means "no tracing", today's behavior.
+TraceSink = Callable[[TraceEvent], None]
 
 
 class HarnessError(RuntimeError):
@@ -33,13 +69,27 @@ class HarnessError(RuntimeError):
 class Harness(ABC):
     """Runs an agent for one invocation and returns its reply."""
 
+    # Extra directories (``~``-relative allowed) this harness's backend needs
+    # writable *outside* the worktree — per-session runtime state its CLI keeps
+    # in the home dir, without which the agent's tools break under a sandbox
+    # that denies writes (see ``Sandbox.wrap``). Each concrete harness declares
+    # its own; the chokepoint (``harnesses._proc``) hands them to the sandbox on
+    # every invocation. Keep the list minimal and *state-only*: never include a
+    # path that configures behavior (settings, hooks) — an agent that can write
+    # those can escape the sandbox on the user's next interactive session.
+    write_allow: tuple[str, ...] = ()
+
     @abstractmethod
-    async def run(self, harness_run: HarnessRun) -> str:
+    async def run(self, harness_run: HarnessRun, on_trace: TraceSink | None = None) -> str:
         """Run the agent described by ``harness_run`` and return its final reply.
 
         Args:
             harness_run: The system prompt, task prompt, working directory, and
                 optional model for this invocation.
+            on_trace: Where to push :class:`TraceEvent`\\ s as the run progresses,
+                or ``None`` to run silently. A harness that cannot stream simply
+                emits nothing (or a single ``result`` event) — the contract is
+                zero or more events, then the returned reply.
 
         Returns:
             The agent's final assistant message as plain text.

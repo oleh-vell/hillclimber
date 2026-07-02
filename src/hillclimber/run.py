@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from harnesses import TraceSink
 from hillclimber.config import load_config
 from hillclimber.git_utils import (
     check_or_init_git,
@@ -22,6 +23,7 @@ from hillclimber.git_utils import (
     remove_worktree,
 )
 from hillclimber.models import Config, ExperimentStatus, Score
+from hillclimber.progress import RunEvent, RunEventSink, ignore_progress
 from hillclimber.scoring import score_artefact
 from hillclimber.telemetry import get_logger
 from sandboxes import get_sandbox
@@ -34,7 +36,11 @@ logger = get_logger(__name__)
 _BASELINE_WORKTREE = "hc_baseline"
 
 
-async def run(path: str | Path) -> ExperimentStatus:
+async def run(
+    path: str | Path,
+    trace_sink: TraceSink | None = None,
+    progress_sink: RunEventSink | None = None,
+) -> ExperimentStatus:
     """Run an experiment end to end from its ``hillclimber.toml``.
 
     v1 is the thinnest possible slice of the loop runner (see README
@@ -44,10 +50,18 @@ async def run(path: str | Path) -> ExperimentStatus:
 
     Args:
         path: The experiment directory (or its ``hillclimber.toml``).
+        trace_sink: Where labelled agent trace events land as cycles run (the
+            CLI's live view). ``None`` falls back to the logging sink (see
+            ``strategies.base.log_trace``), so the run still narrates itself
+            through ordinary logs.
+        progress_sink: Where run-level milestones land — baseline, preflight,
+            cycle lifecycle (see ``hillclimber.progress``). ``None`` drops them;
+            the same story is already told at INFO by the logs.
 
     Returns:
         The final ``ExperimentStatus`` produced by the strategy.
     """
+    emit = progress_sink if progress_sink is not None else ignore_progress
     logger.info("loading experiment from %s", path)
     config = load_config(path)
     logger.info(
@@ -69,16 +83,20 @@ async def run(path: str | Path) -> ExperimentStatus:
                 "or set auto_commit = true to snapshot them automatically"
             )
 
+    emit(RunEvent(kind="baseline_start", message="scoring the baseline"))
     baseline = await get_baseline_score(config)
+    emit(RunEvent(kind="baseline_done", message=f"baseline scored {baseline.value:.3f}", score=baseline.value))
     # Build the OS sandbox that confines every agent CLI to its worktree and
     # hand it to the strategy, which threads it down into the harness.
     sandbox = get_sandbox(config.sandbox)
-    strategy = Chain(sandbox)
+    strategy = Chain(sandbox, trace_sink=trace_sink, progress_sink=progress_sink)
     # Preflight: prove the harness can actually run the configured models before
     # spending a climb on worktrees and scoring. A bad model alias or an unauthed
     # CLI fails here (cheaply) rather than on the first cycle.
     logger.info("verifying harness can run the configured models")
+    emit(RunEvent(kind="preflight_start", message="verifying the configured models"))
     await strategy.harness.verify(config)
+    emit(RunEvent(kind="preflight_done", message="models verified"))
     status = await strategy.execute(config, baseline)
     logger.info("experiment finished: %d/%d cycles run", status.completed, status.total)
     return status

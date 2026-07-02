@@ -38,8 +38,10 @@ import os
 
 # The project's top-level packages. ``configure_logging`` attaches handlers to
 # exactly these, so hillclimber's own logs surface without capturing (or muting)
-# logs from third-party libraries a consumer may also be using.
-_PACKAGE_LOGGERS = ("hillclimber", "strategies", "harnesses")
+# logs from third-party libraries a consumer may also be using. Public so a
+# consumer that temporarily re-routes the project's logs (the CLI's live
+# dashboard) targets the same set.
+PACKAGE_LOGGERS = ("hillclimber", "strategies", "harnesses")
 
 # Marks handlers this module installed, so re-running ``configure_logging`` is
 # idempotent: it replaces its own handlers rather than stacking duplicates and
@@ -159,7 +161,7 @@ def configure_logging(
         handler.set_name(_HC_HANDLER_FLAG)
         setattr(handler, _HC_HANDLER_FLAG, True)
 
-    for name in _PACKAGE_LOGGERS:
+    for name in PACKAGE_LOGGERS:
         package_logger = logging.getLogger(name)
         # Drop handlers we installed previously; leave any others in place.
         for existing in list(package_logger.handlers):
@@ -176,5 +178,5 @@ def configure_logging(
 # Library convention: attach a no-op handler to each package logger at import so
 # records never trigger Python's "No handlers could be found" warning before an
 # entry point calls ``configure_logging``. These are inert and idempotent.
-for _name in _PACKAGE_LOGGERS:
+for _name in PACKAGE_LOGGERS:
     logging.getLogger(_name).addHandler(logging.NullHandler())

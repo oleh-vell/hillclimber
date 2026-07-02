@@ -16,7 +16,7 @@ def _restore_logging():
     propagate); restore it so tests don't leak into one another.
     """
     saved = {}
-    for name in telemetry._PACKAGE_LOGGERS:
+    for name in telemetry.PACKAGE_LOGGERS:
         lg = logging.getLogger(name)
         saved[name] = (list(lg.handlers), lg.level, lg.propagate)
     try:
@@ -51,7 +51,7 @@ def test_get_logger_returns_named_logger():
 def test_configure_logging_attaches_console_handler_to_each_package():
     telemetry.configure_logging(level="DEBUG")
 
-    for name in telemetry._PACKAGE_LOGGERS:
+    for name in telemetry.PACKAGE_LOGGERS:
         managed = _managed_handlers(name)
         assert len(managed) == 1
         assert isinstance(managed[0], logging.StreamHandler)
@@ -64,7 +64,7 @@ def test_configure_logging_is_idempotent():
     telemetry.configure_logging()
 
     # Re-running replaces its own handlers rather than stacking duplicates.
-    for name in telemetry._PACKAGE_LOGGERS:
+    for name in telemetry.PACKAGE_LOGGERS:
         assert len(_managed_handlers(name)) == 1
 
 

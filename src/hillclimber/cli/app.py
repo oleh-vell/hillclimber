@@ -13,6 +13,8 @@ from typing import Annotated
 
 import typer
 
+from hillclimber.cli.commands import check as check_cmd
+from hillclimber.cli.commands import feedback as feedback_cmd
 from hillclimber.cli.commands import init as init_cmd
 from hillclimber.cli.commands import run as run_cmd
 from hillclimber.cli.state import CLIState
@@ -45,4 +47,6 @@ def _global_options(
 # modules never import ``app`` (no cycle) and this file is the one place the full
 # command surface is visible. New subcommands slot in with one line each.
 app.command("init")(init_cmd.init)
+app.command("check")(check_cmd.check)
 app.command("run")(run_cmd.run)
+app.command("feedback")(feedback_cmd.feedback)

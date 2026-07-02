@@ -25,29 +25,37 @@ from __future__ import annotations
 
 import os
 import sys
+from collections.abc import Sequence
 
 from sandboxes.base import Sandbox
 
 
-def _render_profile(workdir: str, deny_read: list[str], network: bool) -> str:
+def _render_profile(workdir: str, deny_read: list[str], network: bool, write_allow: Sequence[str] = ()) -> str:
     """Render the Seatbelt profile confining a child to ``workdir``.
 
     Pure string work (no shelling out, no I/O beyond ``realpath``) so it is unit
-    testable in isolation. ``workdir`` and every ``deny_read`` root are
-    ``~``-expanded and ``realpath``'d before being embedded, so symlinked inputs
-    (e.g. ``/tmp`` -> ``/private/tmp``) match the rules.
+    testable in isolation. ``workdir``, every ``deny_read`` root, and every
+    ``write_allow`` dir are ``~``-expanded and ``realpath``'d before being
+    embedded, so symlinked inputs (e.g. ``/tmp`` -> ``/private/tmp``) match the
+    rules.
 
     Args:
         workdir: The worktree the child is confined to (read+write allowed).
         deny_read: Sensitive roots the child may not read.
         network: When ``False``, append ``(deny network*)``; when ``True``, the
             default profile's ``(allow default)`` already permits network.
+        write_allow: Extra dirs the child may write beyond the worktree — the
+            harness's declared runtime-state dirs (see ``Harness.write_allow``).
+            Keep these narrow: anything here is writable by the *agent*, so a
+            path that configures other tooling (hooks, settings) would be an
+            escape hatch out of the sandbox.
 
     Returns:
         The Seatbelt profile text to pass to ``sandbox-exec -p``.
     """
     work = os.path.realpath(os.path.expanduser(workdir))
     roots = [os.path.realpath(os.path.expanduser(r)) for r in deny_read]
+    allows = [os.path.realpath(os.path.expanduser(a)) for a in write_allow]
 
     lines = [
         "(version 1)",
@@ -58,6 +66,8 @@ def _render_profile(workdir: str, deny_read: list[str], network: bool) -> str:
         "(allow file-write*",
         f'  (subpath "{work}")',
         '  (subpath "/private/var/folders")',
+        # The harness's runtime-state dirs (per-session scratch its CLI needs).
+        *(f'  (subpath "{a}")' for a in allows),
         '  (regex #"^/dev/tty")',
         '  (literal "/dev/null"))',
     ]
@@ -105,6 +115,6 @@ class SeatbeltSandbox(Sandbox):
         self.deny_read = deny_read
         self.network = network
 
-    def wrap(self, argv: list[str], workdir: str) -> list[str]:
-        profile = _render_profile(workdir, self.deny_read, self.network)
+    def wrap(self, argv: list[str], workdir: str, write_allow: Sequence[str] = ()) -> list[str]:
+        profile = _render_profile(workdir, self.deny_read, self.network, write_allow)
         return ["sandbox-exec", "-p", profile, *argv]

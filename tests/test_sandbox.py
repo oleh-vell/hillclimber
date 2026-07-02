@@ -24,7 +24,7 @@ import pytest
 # (strategies.base, sandboxes, harnesses) directly otherwise hits a circular
 # import via hillclimber.run -> strategies.chain.
 import hillclimber  # noqa: F401
-from harnesses._proc import exec_agent
+from harnesses._proc import exec_agent, stream_exec_agent
 from hillclimber.models import (
     DEFAULT_DENY_READ,
     Cycle,
@@ -227,6 +227,21 @@ def test_empty_deny_read_emits_no_read_rules():
     assert "file-read" not in profile
 
 
+def test_write_allow_dirs_are_write_allowed_and_expanded():
+    # A harness's declared runtime-state dirs (see ``Harness.write_allow``) land
+    # in the write-allow block, ~-expanded and realpath'd like every other path.
+    profile = _render_profile("/x/wt", list(DEFAULT_DENY_READ), network=True, write_allow=["~/.claude/session-env"])
+    write_block = profile[profile.index("(allow file-write*") : profile.index("(deny file-read*")]
+    assert f'(subpath "{_resolve("~/.claude/session-env")}")' in write_block
+
+
+def test_no_write_allow_dirs_add_no_extra_subpaths():
+    with_extra = _render_profile("/x/wt", [], network=True, write_allow=["/x/state"])
+    without = _render_profile("/x/wt", [], network=True)
+    assert '(subpath "/x/state")' in with_extra
+    assert '(subpath "/x/state")' not in without
+
+
 def test_symlinked_paths_are_realpathed(tmp_path):
     # Seatbelt matches on the realpath, so a symlinked input must resolve to its
     # target (this is why ``/tmp`` -> ``/private/tmp`` on macOS must be resolved).
@@ -296,6 +311,26 @@ class TestSeatbeltEnforcement:
 
         assert rc == 0
         assert (work / "inside.txt").read_text() == "hi\n"
+
+    def test_write_allow_dir_is_writable_outside_the_worktree(self, sandbox_root):
+        # The harness write-allow seam end to end: a runtime-state dir outside
+        # the worktree (like ~/.claude/session-env) is denied by default and
+        # writable exactly when the chokepoint hands it to the sandbox.
+        work = Path(sandbox_root) / "wt"
+        work.mkdir()
+        state = Path(sandbox_root) / "state"
+        state.mkdir()
+        sandbox = self._seatbelt(deny_read=[])
+        script = f'mkdir "{state}/session" && echo hi > "{state}/session/env.sh"'
+
+        _, _, rc_denied = _sh(sandbox, str(work), script)
+        _, _, rc_allowed = asyncio.run(
+            exec_agent(["/bin/sh", "-c", script], str(work), sandbox, write_allow=[str(state)])
+        )
+
+        assert rc_denied != 0
+        assert rc_allowed == 0
+        assert (state / "session" / "env.sh").read_text() == "hi\n"
 
     def test_write_outside_worktree_is_denied(self, sandbox_root):
         work = Path(sandbox_root) / "wt"
@@ -369,3 +404,47 @@ class TestSeatbeltEnforcement:
         _, _, rc = _sh(sandbox, str(worktree), "git status")
 
         assert rc != 0
+
+
+# --------------------------------------------------------------------------- #
+# stream_exec_agent — the streaming sibling of the exec_agent chokepoint
+# --------------------------------------------------------------------------- #
+
+
+def test_stream_exec_agent_delivers_lines_as_they_come(tmp_path: Path):
+    lines: list[bytes] = []
+    script = "printf 'one\\ntwo\\n'; echo oops >&2; exit 3"
+
+    stderr, rc = asyncio.run(
+        stream_exec_agent(["/bin/sh", "-c", script], str(tmp_path), PassthroughSandbox(), lines.append)
+    )
+
+    assert lines == [b"one\n", b"two\n"]
+    assert stderr.strip() == b"oops"
+    assert rc == 3
+
+
+def test_stream_exec_agent_skips_blank_lines(tmp_path: Path):
+    lines: list[bytes] = []
+
+    _, rc = asyncio.run(
+        stream_exec_agent(
+            ["/bin/sh", "-c", "printf 'a\\n\\n  \\nb\\n'"], str(tmp_path), PassthroughSandbox(), lines.append
+        )
+    )
+
+    assert rc == 0
+    assert lines == [b"a\n", b"b\n"]
+
+
+def test_stream_exec_agent_handles_lines_beyond_the_default_asyncio_limit(tmp_path: Path):
+    # stream-json lines embedding large tool results routinely exceed asyncio's
+    # default 64 KiB per-line limit; the chokepoint must not choke on them.
+    lines: list[bytes] = []
+    script = "head -c 200000 /dev/zero | tr '\\0' 'x'; echo"
+
+    _, rc = asyncio.run(stream_exec_agent(["/bin/sh", "-c", script], str(tmp_path), PassthroughSandbox(), lines.append))
+
+    assert rc == 0
+    assert len(lines) == 1
+    assert len(lines[0]) == 200001  # 200k of 'x' plus the newline

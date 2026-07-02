@@ -1,0 +1,35 @@
+# hillclimber.toml — describes one experiment. This file lives at the artefact
+# root: the scorer runs at each cycle's checkout root, so every path in here is
+# relative to this directory.
+path_to_artefact = "."
+strategy = "chain"
+
+# What the climb optimizes toward; the run stops early once `target` is reached.
+[goal]
+direction = "maximize"
+target = 0.8
+
+# Hard stop: how many improvement cycles to attempt.
+[budget]
+cycles = 3
+
+# The fitness function: a command that prints an Eval as JSON on stdout
+# (see eval.py). Its score is the number the climb pushes up.
+[scorer]
+kind = "command"
+cmd = "python eval.py"
+
+# Proposes the next hypothesis for improving the artefact.
+[hillclimber_agent]
+harness = "claude"
+model = "claude-opus-4-8"
+
+# Applies the proposed change to the artefact.
+[worker_agent]
+harness = "claude"
+model = "claude-opus-4-8"
+
+# Reflects on the score delta and steers the next hypothesis.
+[reflector_agent]
+harness = "claude"
+model = "claude-opus-4-8"

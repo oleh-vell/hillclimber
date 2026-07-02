@@ -8,11 +8,14 @@ Linux (or anywhere Seatbelt is unavailable) until a portable backend lands.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from sandboxes.base import Sandbox
 
 
 class PassthroughSandbox(Sandbox):
     """A no-op sandbox: the child runs exactly as given."""
 
-    def wrap(self, argv: list[str], workdir: str) -> list[str]:
+    def wrap(self, argv: list[str], workdir: str, write_allow: Sequence[str] = ()) -> list[str]:
+        # No confinement -> nothing to re-allow; ``write_allow`` is moot here.
         return argv

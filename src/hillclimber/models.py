@@ -15,11 +15,12 @@ it, print it, discard it. It must never gain a method that mutates or persists.
 
 from __future__ import annotations
 
+import math
 from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from strategies import prompt
 
@@ -147,17 +148,35 @@ class Score(BaseModel):
 
 
 class Eval(BaseModel):
-    """The score returned by the user's eval file.
+    """The score returned by the user's eval — the wire contract with the artefact.
 
-    This is the contract between hillclimber and the artefact. The scaffolded
-    ``test_eval_hillclimber.py`` exposes ``evaluate() -> Eval``; the user fills in
-    the body to produce ``score``. Higher is better; the climb pushes it up
-    (e.g. 0.6 -> 0.9). ``details`` is optional richness for the trace/viewer
-    (per-case breakdown, sub-metrics) and never affects the climb.
+    The eval command ends by printing this as one JSON line on stdout (the
+    *envelope*); the runner recognises it by the ``hillclimber_eval`` marker and
+    validates it here (see ``scoring.parse_eval``). The marker makes recognition
+    deterministic — stray JSON the artefact prints can never be mistaken for the
+    score — and doubles as the schema version for later evolution.
+
+    The user's file does **not** need this class (or hillclimber installed): the
+    scaffolded ``eval.py`` builds the same envelope with a stdlib-only dataclass
+    (see ``cli.commands.init``). Evals that do have hillclimber available may
+    print ``Eval(...).model_dump_json()`` instead — same envelope.
+
+    Higher ``score`` is better; the climb pushes it up (e.g. 0.6 -> 0.9), and it
+    must be finite (NaN/inf would poison best-so-far comparisons). ``details``
+    is optional richness for the trace/viewer (per-case breakdown, sub-metrics)
+    and never affects the climb.
     """
 
+    hillclimber_eval: Literal[1] = 1  # envelope marker + schema version
     score: float  # the climbable number, typically in [0, 1]
     details: dict = Field(default_factory=dict)  # optional, for tracing/inspection
+
+    @field_validator("score")
+    @classmethod
+    def _score_must_be_finite(cls, value: float) -> float:
+        if not math.isfinite(value):
+            raise ValueError("score must be a finite number, not NaN or infinity")
+        return value
 
 
 class Goal(BaseModel):
@@ -316,6 +335,7 @@ class CycleSummary(BaseModel):
     experiment_id: str
     cycle_id: str  # e.g. cyc_001
     status: CycleStatus
+    hypothesis: str = ""  # what this cycle tried, for display
     score_after: Score | None = None
     accepted: bool
     delta: float  # score_after - baseline (computed)

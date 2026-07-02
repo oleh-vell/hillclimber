@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from harnesses.base import Harness
+from harnesses.base import Harness, HarnessError, TraceEvent, TraceSink
 from harnesses.claude import ClaudeHarness
 from sandboxes.base import Sandbox
 
@@ -41,4 +41,4 @@ def get_harness(name: str, sandbox: Sandbox) -> Harness:
     return factory(sandbox)
 
 
-__all__ = ["ClaudeHarness", "Harness", "get_harness"]
+__all__ = ["ClaudeHarness", "Harness", "HarnessError", "TraceEvent", "TraceSink", "get_harness"]

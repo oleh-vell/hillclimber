@@ -1,39 +1,37 @@
-# Paths are relative to this toml, which must sit at the artefact root; "." (the
-# default when omitted) is the config's own directory.
+# hillclimber.toml — describes one experiment. This file lives at the artefact
+# root: the scorer runs at each cycle's checkout root, so every path in here is
+# relative to this directory.
 path_to_artefact = "."
 strategy = "chain"
-# Ref the climb starts from (baseline scored at it, cycle 1 forks from it).
-# Omit or leave empty to start from the artefact's current HEAD.
-# start_branch = "main"
 
-# Fitness function: run the eval, whose evaluate() returns a hillclimber.Eval.
-# The command runs with cwd set to the cycle's worktree, so the path must be
-# relative: an absolute path would run the original eval.py, whose sys.path[0] is
-# the original dir, so it would import the unmodified ocr_pipeline and score the
-# wrong copy (every cycle stuck at the baseline). Relative -> the worktree's copy.
-[scorer]
-kind = "command"
-cmd = "uv run python eval.py"
-
-# Climb toward a perfect extraction score; stop early if we reach it.
+# What the climb optimizes toward; the run stops early once `target` is reached.
 [goal]
 direction = "maximize"
 target = 1.0
 
-# Hard stop: number of cycles to attempt.
+# Hard stop: how many improvement cycles to attempt.
 [budget]
-cycles = 1
+cycles = 5
 
-# Proposes the next hypothesis for improving the pipeline.
+# The fitness function: a command that prints an Eval as JSON on stdout
+# (see eval.py). Its score is the number the climb pushes up.
+[scorer]
+kind = "command"
+# `uv run` so eval.py executes in this project's environment (where mistralai is
+# installed), not against whatever bare `python` happens to be on PATH.
+cmd = "uv run python eval.py"
+
+# Proposes the next hypothesis for improving the artefact.
 [hillclimber_agent]
-harness = "api"
+harness = "claude"
 model = "claude-sonnet-4-6"
 
 # Applies the proposed change to the artefact.
 [worker_agent]
-harness = "api"
+harness = "claude"
 model = "claude-sonnet-4-6"
+
 # Reflects on the score delta and steers the next hypothesis.
 [reflector_agent]
-harness = "api"
+harness = "claude"
 model = "claude-sonnet-4-6"

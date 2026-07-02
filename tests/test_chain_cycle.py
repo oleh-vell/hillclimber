@@ -7,14 +7,16 @@ how its result is scored — is pinned without shelling out to a real CLI.
 """
 
 import asyncio
+import logging
 from pathlib import Path
 
 import pytest
 
 import hillclimber  # noqa: F401  (initialise package before importing strategies)
-from harnesses import ClaudeHarness, Harness
+from harnesses import ClaudeHarness, Harness, TraceEvent, TraceSink
 from harnesses.claude import HarnessRun
 from hillclimber.models import Budget, Config, Cycle, CycleStatus, Goal, Score
+from hillclimber.progress import RunEvent, RunEventSink
 from sandboxes import PassthroughSandbox
 from strategies.base import CycleRecord
 from strategies.chain import Chain
@@ -26,7 +28,7 @@ class _RecordingHarness(Harness):
     def __init__(self) -> None:
         self.calls: list[HarnessRun] = []
 
-    async def run(self, harness_run: HarnessRun) -> str:
+    async def run(self, harness_run: HarnessRun, on_trace: TraceSink | None = None) -> str:
         self.calls.append(harness_run)
         return "use a regex instead of str.split()"
 
@@ -34,6 +36,15 @@ class _RecordingHarness(Harness):
         # These tests drive the harness directly, never the preflight; a no-op
         # satisfies the abstract contract.
         return None
+
+
+class _TracingHarness(_RecordingHarness):
+    """A fake harness that emits one trace event per run, like a real one."""
+
+    async def run(self, harness_run: HarnessRun, on_trace: TraceSink | None = None) -> str:
+        if on_trace is not None:
+            on_trace(TraceEvent(kind="tool_use", summary="Read(pipeline.py)", raw={}))
+        return await super().run(harness_run, on_trace)
 
 
 def _config() -> Config:
@@ -74,7 +85,7 @@ def test_propose_hypothesis_runs_the_agent_through_the_harness():
     fake = _RecordingHarness()
     chain.harness = fake
 
-    hypothesis = asyncio.run(chain._propose_hypothesis(_config(), "hc_a1b2_cycle_001"))
+    hypothesis = asyncio.run(chain._propose_hypothesis(_config(), "hc_a1b2_cycle_001", index=1))
 
     assert hypothesis == "use a regex instead of str.split()"
     # The agent's config drives the call: its worktree, model, and (filled) prompt.
@@ -93,7 +104,7 @@ def test_propose_hypothesis_feeds_past_attempts_into_the_prompt():
     chain._cycle_records().append(CycleRecord(hypothesis="add caching", before=0.50, after=0.60))
     chain._cycle_records().append(CycleRecord(hypothesis="drop validation", before=0.60, after=0.55))
 
-    asyncio.run(chain._propose_hypothesis(_config(), "hc_a1b2_cycle_001"))
+    asyncio.run(chain._propose_hypothesis(_config(), "hc_a1b2_cycle_001", index=1))
 
     prompt = fake.calls[0].prompt
     # Both past hypotheses and their score movement are surfaced to the proposer.
@@ -109,7 +120,7 @@ def test_propose_hypothesis_omits_history_on_the_first_cycle():
     fake = _RecordingHarness()
     chain.harness = fake
 
-    asyncio.run(chain._propose_hypothesis(_config(), "hc_a1b2_cycle_001"))
+    asyncio.run(chain._propose_hypothesis(_config(), "hc_a1b2_cycle_001", index=1))
 
     # No attempts yet -> no "we already tried" block, just the bare task.
     assert "already tried" not in fake.calls[0].prompt
@@ -137,6 +148,76 @@ def test_apply_hypothesis_runs_the_worker_and_asks_for_a_commit():
 
 
 # --------------------------------------------------------------------------- #
+# trace events (harness -> labelled sink)
+# --------------------------------------------------------------------------- #
+
+
+def test_propose_hypothesis_forwards_labelled_traces_to_the_sink():
+    events: list[TraceEvent] = []
+    chain = Chain(PassthroughSandbox(), trace_sink=events.append)
+    chain.harness = _TracingHarness()
+
+    asyncio.run(chain._propose_hypothesis(_config(), "hc_a1b2_cycle_001", index=3))
+
+    # The harness emitted an anonymous event; the strategy stamped who ran.
+    assert len(events) == 1
+    assert events[0].kind == "tool_use"
+    assert events[0].summary == "Read(pipeline.py)"
+    assert events[0].label == "cycle 003/hillclimber"
+
+
+def test_apply_hypothesis_forwards_labelled_traces_to_the_sink():
+    events: list[TraceEvent] = []
+    chain = Chain(PassthroughSandbox(), trace_sink=events.append)
+    chain.harness = _TracingHarness()
+
+    asyncio.run(chain._apply_hypothesis(_config(), _cycle(), "hc_a1b2_cycle_001"))
+
+    assert [e.label for e in events] == ["cycle 001/worker"]
+
+
+def test_default_trace_sink_logs_events(caplog):
+    chain = Chain(PassthroughSandbox())
+    chain.harness = _TracingHarness()
+
+    with caplog.at_level(logging.INFO, logger="strategies.base"):
+        asyncio.run(chain._propose_hypothesis(_config(), "hc_a1b2_cycle_001", index=1))
+
+    # With no sink injected, traces surface as ordinary log lines.
+    assert any("cycle 001/hillclimber" in message and "Read(pipeline.py)" in message for message in caplog.messages)
+
+
+# --------------------------------------------------------------------------- #
+# progress events (strategy -> run-level sink)
+# --------------------------------------------------------------------------- #
+
+
+def test_propose_hypothesis_emits_the_proposing_stage():
+    events: list[RunEvent] = []
+    chain = Chain(PassthroughSandbox(), progress_sink=events.append)
+    chain.harness = _RecordingHarness()
+
+    asyncio.run(chain._propose_hypothesis(_config(), "hc_a1b2_cycle_001", index=1))
+
+    assert [(e.kind, e.stage) for e in events] == [("cycle_stage", "proposing")]
+    assert events[0].index == 1
+    assert events[0].total == 1  # the budget's cycle count
+
+
+def test_apply_hypothesis_emits_the_applying_stage_with_the_hypothesis():
+    events: list[RunEvent] = []
+    chain = Chain(PassthroughSandbox(), progress_sink=events.append)
+    chain.harness = _RecordingHarness()
+
+    asyncio.run(chain._apply_hypothesis(_config(), _cycle(), "hc_a1b2_cycle_001"))
+
+    assert [(e.kind, e.stage) for e in events] == [("cycle_stage", "applying")]
+    # The applying event carries the hypothesis so a consumer can show what the
+    # worker is about to do.
+    assert events[0].hypothesis == "try X"
+
+
+# --------------------------------------------------------------------------- #
 # execute (the cycle loop)
 # --------------------------------------------------------------------------- #
 
@@ -145,8 +226,8 @@ class _StubChain(Chain):
     """A ``Chain`` whose ``one_cycle`` returns canned scores instead of touching
     git or the harness, so the loop itself can be tested in isolation."""
 
-    def __init__(self, scores: list[float]) -> None:
-        super().__init__(PassthroughSandbox())
+    def __init__(self, scores: list[float], progress_sink: RunEventSink | None = None) -> None:
+        super().__init__(PassthroughSandbox(), progress_sink=progress_sink)
         self._scores = scores
         self.cycles_run: list[tuple[str, int, str]] = []
 
@@ -248,6 +329,25 @@ def test_execute_runs_nothing_when_baseline_already_meets_goal():
 
     assert status.completed == 0
     assert chain.cycles_run == []
+
+
+def test_execute_emits_cycle_start_and_done_events():
+    events: list[RunEvent] = []
+    chain = _StubChain([0.6, 0.4], progress_sink=events.append)
+
+    asyncio.run(chain.execute(_exec_config(cycles=2), _baseline()))
+
+    assert [e.kind for e in events] == ["cycle_start", "cycle_done", "cycle_start", "cycle_done"]
+    starts = [e for e in events if e.kind == "cycle_start"]
+    assert [(e.index, e.total) for e in starts] == [(1, 2), (2, 2)]
+    done_1, done_2 = (e for e in events if e.kind == "cycle_done")
+    # Cycle 1: 0.5 -> 0.6 against its parent (the baseline).
+    assert done_1.score == pytest.approx(0.6)
+    assert done_1.delta == pytest.approx(0.1)
+    assert done_1.hypothesis == "stub"
+    # Cycle 2 chains off cycle 1, so its delta is measured against 0.6, not baseline.
+    assert done_2.score == pytest.approx(0.4)
+    assert done_2.delta == pytest.approx(-0.2)
 
 
 def test_execute_best_is_the_top_run_even_below_baseline():
