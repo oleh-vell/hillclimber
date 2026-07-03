@@ -101,7 +101,9 @@ function SpecToml() {
       <Eq />
       <Str>&quot;python eval.py&quot;</Str>
       {"\n\n"}
-      <Comment># Proposes the next hypothesis for improving the artefact.</Comment>
+      <Comment>
+        # Proposes the next hypothesis for improving the artefact.
+      </Comment>
       {"\n"}
       <Table>[agents.orchestrator]</Table>
       {"\n"}
@@ -241,9 +243,14 @@ export function HowItWorks() {
               <SpecToml />
             </div>
             <p className="mt-7 text-[16px] leading-[1.65] text-paper/[0.6]">
-              A spec is a plain-text declaration of intent — your goal, the
-              metric to optimize, the budget, and which models to use. No glue
-              code, no orchestration. Just describe the hill you want to climb.
+              The spec file defines the core of the long-running experiment.
+              Define your goal, budget, and eval function to measure the
+              improvement rate. <br />
+              To generate the spec and eval files execute{" "}
+              <code className="rounded-[5px] border border-white/10 bg-white/[0.06] px-[6px] py-[2px] font-mono text-[13px] text-mint">
+                hillclimber init
+              </code>
+              .
             </p>
           </div>
 
@@ -262,10 +269,13 @@ export function HowItWorks() {
               <RunTui />
             </div>
             <p className="mt-7 text-[16px] leading-[1.65] text-paper/[0.6]">
-              hillclimber reads your spec and takes over — generating candidate
-              changes, running each in an isolated git branch, scoring it
-              against your metric, and keeping only what improves. Watch it
-              climb in real time.
+              hillclimber reads your spec and orchestrates the experiment. Each
+              cycle is an isolated git worktee, with dedicated coding agent and
+              tight feedback loop.
+              <br /> To start climbing execute{" "}
+              <code className="rounded-[5px] border border-white/10 bg-white/[0.06] px-[6px] py-[2px] font-mono text-[13px] text-mint">
+                hillclimber run
+              </code>
             </p>
           </div>
         </div>

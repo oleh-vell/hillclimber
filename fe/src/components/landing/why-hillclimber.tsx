@@ -46,7 +46,7 @@ function WhyCard() {
 type Feature = {
   icon: ReactNode;
   title: string;
-  description: string;
+  description: ReactNode;
   comingSoon?: boolean;
 };
 
@@ -54,33 +54,39 @@ const FEATURES: Feature[] = [
   {
     icon: <SlidersIcon className="size-[22px]" />,
     title: "You're in control",
-    description:
-      "Set the goal, budget, and guardrails. Approve or roll back any change — hillclimber never touches main without your rules.",
+    description: "Explicilty set up the goal, budget, and models. ",
   },
   {
     icon: <CodeIcon className="size-[22px]" />,
     title: "Free & open-source",
     description:
-      "MIT-licensed and fully self-hostable. No vendor lock-in, no usage caps — read the code, fork it, ship it.",
+      "It's completely free to use, and you are more than welcome to tweak the source code in any way or form.",
   },
   {
     icon: <ExtendIcon className="size-[22px]" />,
     title: "Extendable by design",
     description:
-      "Plug in custom scorers, generators, and hooks. Every stage of the loop is an interface you can override.",
+      "Architecture supports adding new strategies, harnesses, and sandboxes. Work with what suits you best.",
   },
   {
     icon: <ShieldIcon className="size-[22px]" />,
     title: "Durable execution",
-    description:
-      "Long-running jobs survive crashes and restarts. Every cycle is checkpointed and resumable.",
+    description: (
+      <>
+        If the agent crashes, you can always run{" "}
+        <code className="rounded-[5px] border border-white/10 bg-white/[0.06] px-[6px] py-[2px] font-mono text-[13px] text-mint">
+          hillclimber continue
+        </code>{" "}
+        to resume where you left off.
+      </>
+    ),
     comingSoon: true,
   },
   {
     icon: <LinkIcon strokeWidth={1.6} className="size-[22px]" />,
     title: "Use with your harness",
     description:
-      "Bring your own eval harness or agent framework. hillclimber orchestrates around it, not the other way around.",
+      "Let your harness to do all the work and only use hillclimber as experiment orchestrator.",
     comingSoon: true,
   },
 ];

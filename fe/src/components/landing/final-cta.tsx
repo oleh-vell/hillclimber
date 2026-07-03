@@ -4,10 +4,11 @@ export function FinalCta() {
   return (
     <section
       id="final-cta"
-      className="relative overflow-hidden border-t border-white/[0.08] bg-ink px-6 py-[140px] md:px-10"
+      className="relative bg-ink px-6 py-[110px] md:px-10"
     >
-      {/* radial glow */}
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(60%_70%_at_50%_30%,rgba(94,234,160,0.10)_0%,transparent_70%)]" />
+      {/* seam-to-headline wash — one soft vertical glow feathering across the
+          boundary (no hard clip) and pooling behind the wordmark */}
+      <div className="pointer-events-none absolute inset-x-0 -top-28 h-[640px] bg-[radial-gradient(60%_70%_at_50%_40%,rgba(94,234,160,0.11)_0%,transparent_72%)]" />
 
       <div className="relative mx-auto flex max-w-[680px] flex-col items-center text-center">
         <div className="mb-[22px] font-mono text-[12px] font-semibold uppercase leading-none tracking-[0.2em] text-mint">
