@@ -23,6 +23,9 @@ from rich.prompt import Confirm, FloatPrompt, IntPrompt, Prompt
 from hillclimber.cli.banner import print_banner
 from hillclimber.cli.console import console, err_console
 from hillclimber.config import HILLCLIMBER_TOML
+from hillclimber.models import DEFAULT_STRATEGY
+from strategies.base import DEFAULT_HARNESS
+from strategies.registry import get_strategy
 
 EVAL_PY = "eval.py"
 
@@ -46,13 +49,22 @@ def _render_toml(
     target: float = DEFAULT_TARGET,
     model: str = MODEL_CHOICES[0],
 ) -> str:
-    """Render the starter ``hillclimber.toml`` with the given knobs filled in."""
+    """Render the starter ``hillclimber.toml`` with the given knobs filled in.
+
+    The ``[agents.<role>]`` tables are derived from the default strategy's own
+    role declaration (``Strategy.roles``), so the scaffold and the requirement
+    check can never drift apart.
+    """
+    agent_tables = "\n".join(
+        f'# {spec.description}\n[agents.{role}]\nharness = "{DEFAULT_HARNESS}"\nmodel = "{model}"\n'
+        for role, spec in get_strategy(DEFAULT_STRATEGY).roles.items()
+    )
     return f"""\
 # hillclimber.toml — describes one experiment. This file lives at the artefact
 # root: the scorer runs at each cycle's checkout root, so every path in here is
 # relative to this directory.
 path_to_artefact = "."
-strategy = "chain"
+strategy = "{DEFAULT_STRATEGY}"
 
 # What the climb optimizes toward; the run stops early once `target` is reached.
 [goal]
@@ -69,21 +81,7 @@ cycles = {cycles}
 kind = "command"
 cmd = "python eval.py"
 
-# Proposes the next hypothesis for improving the artefact.
-[hillclimber_agent]
-harness = "claude"
-model = "{model}"
-
-# Applies the proposed change to the artefact.
-[worker_agent]
-harness = "claude"
-model = "{model}"
-
-# Reflects on the score delta and steers the next hypothesis.
-[reflector_agent]
-harness = "claude"
-model = "{model}"
-"""
+{agent_tables}"""
 
 
 # The starter config. Must stay loadable by ``hillclimber.config.load_config``
@@ -188,7 +186,7 @@ def _ask_cycles() -> int:
 
 
 def _ask_model() -> str:
-    """Ask which Claude model powers all three agent roles."""
+    """Ask which Claude model powers the agent roles."""
     console.print("Which Claude model should power the agents?")
     for index, model in enumerate(MODEL_CHOICES, start=1):
         console.print(f"  {index}) {model}")

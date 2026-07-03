@@ -15,12 +15,14 @@ from __future__ import annotations
 import asyncio
 import uuid
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import ClassVar
 
 from harnesses import Harness, TraceEvent, TraceSink, get_harness
 from hillclimber.git_utils import commit_all, head_sha, is_dirty
-from hillclimber.models import Config, Cycle, ExperimentStatus, Score
+from hillclimber.models import Agent, Config, Cycle, ExperimentStatus, Score
 from hillclimber.progress import RunEventSink, ignore_progress
 from hillclimber.telemetry import get_logger
 from sandboxes.base import Sandbox
@@ -32,6 +34,15 @@ logger = get_logger(__name__)
 DEFAULT_HARNESS = "claude"
 
 
+def missing_role_message(strategy: str, role: str) -> str:
+    """The error for a config that lacks a role's ``[agents.<role>]`` table.
+
+    One builder so ``verify_agents`` (the up-front check) and ``_role_agent``
+    (the safety net for library callers) can never drift apart.
+    """
+    return f'strategy "{strategy}" requires agent "{role}"; please add [agents.{role}] to hillclimber.toml'
+
+
 def log_trace(event: TraceEvent) -> None:
     """The default trace sink: one log line per agent step.
 
@@ -41,6 +52,20 @@ def log_trace(event: TraceEvent) -> None:
     passes its own ``TraceSink`` instead; nothing else changes.
     """
     logger.info("[%s] %s: %s", event.label or "agent", event.kind, event.summary)
+
+
+@dataclass(frozen=True)
+class RoleSpec:
+    """What a strategy needs from one agent role it declares (see ``Strategy.roles``).
+
+    ``default_prompt`` is the role's system prompt when the config doesn't
+    override it (see ``Strategy._role_agent``); ``description`` is the one-line
+    human summary of the role — it becomes the comment above the role's
+    ``[agents.<role>]`` table in the scaffolded ``hillclimber.toml``.
+    """
+
+    default_prompt: str
+    description: str
 
 
 @dataclass(frozen=True)
@@ -61,6 +86,11 @@ class CycleRecord:
 
 class Strategy(ABC):
     """Base class for climb strategies."""
+
+    # The agent roles this strategy drives — exactly the ``[agents.<role>]``
+    # tables a config must define for it. A class attribute so ``check``/``init``
+    # can read it without building a sandbox or harness.
+    roles: ClassVar[Mapping[str, RoleSpec]] = {}
 
     def __init__(
         self,
@@ -140,6 +170,25 @@ class Strategy(ABC):
         lock = Path(worktree) / f"{cycle.cycle_id}.lock"
         await asyncio.to_thread(lock.write_text, cycle.model_dump_json(indent=2))
         return str(lock)
+
+    def _role_agent(self, config: Config, role: str) -> Agent:
+        """The config's agent for ``role``, with its system prompt resolved.
+
+        A ``system_prompt`` set in the toml wins; one left unset is filled from
+        this strategy's role default (on a copy — the config stays as loaded).
+        The missing-role check is a safety net for library callers that skip
+        ``verify_agents``.
+
+        Raises:
+            ValueError: If the config defines no agent for ``role``.
+        """
+        spec = type(self).roles[role]
+        agent = config.agents.get(role)
+        if agent is None:
+            raise ValueError(missing_role_message(config.strategy, role))
+        if agent.system_prompt is None:
+            return agent.model_copy(update={"system_prompt": spec.default_prompt})
+        return agent
 
     def _make_trace_sink(self, label: str) -> TraceSink:
         """Return a sink that stamps ``label`` onto each event and forwards it.

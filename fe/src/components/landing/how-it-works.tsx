@@ -60,7 +60,7 @@ const Table = ({ children }: { children: ReactNode }) => (
 
 function SpecToml() {
   return (
-    <pre className="m-0 whitespace-pre-wrap break-words px-6 py-[22px] font-mono text-[13.5px] font-medium leading-[1.85] text-paper/[0.9] [tab-size:2]">
+    <pre className="m-0 h-[360px] overflow-y-auto whitespace-pre-wrap break-words px-6 py-[22px] font-mono text-[13.5px] font-medium leading-[1.85] text-paper/[0.9] [tab-size:2] select-text">
       <K>path_to_artefact</K>
       <Eq />
       <Str>&quot;my_repo/src/&quot;</Str>
@@ -69,9 +69,7 @@ function SpecToml() {
       <Eq />
       <Str>&quot;chain&quot;</Str>
       {"\n\n"}
-      <Comment>
-        # Climb toward a perfect extraction score; stop early if we reach it.
-      </Comment>
+      <Comment># Explicit target to climb</Comment>
       {"\n"}
       <Table>[goal]</Table>
       {"\n"}
@@ -83,13 +81,13 @@ function SpecToml() {
       <Eq />
       <Num>1.0</Num>
       {"\n\n"}
-      <Comment># Hard stop: number of cycles to attempt.</Comment>
+      <Comment># Hard stop: max cycles, tokens or money.</Comment>
       {"\n"}
       <Table>[budget]</Table>
       {"\n"}
       <K>cycles</K>
       <Eq />
-      <Num>1</Num>
+      <Num>5</Num>
       {"\n\n"}
       <Comment># Eval function</Comment>
       {"\n"}
@@ -102,7 +100,118 @@ function SpecToml() {
       <K>cmd</K>
       <Eq />
       <Str>&quot;python eval.py&quot;</Str>
+      {"\n\n"}
+      <Comment># Proposes the next hypothesis for improving the artefact.</Comment>
+      {"\n"}
+      <Table>[agents.orchestrator]</Table>
+      {"\n"}
+      <K>harness</K>
+      <Eq />
+      <Str>&quot;claude&quot;</Str>
+      {"\n"}
+      <K>model</K>
+      <Eq />
+      <Str>&quot;claude-opus-4-8&quot;</Str>
+      {"\n\n"}
+      <Comment># Applies the proposed change to the artefact.</Comment>
+      {"\n"}
+      <Table>[agents.worker]</Table>
+      {"\n"}
+      <K>harness</K>
+      <Eq />
+      <Str>&quot;claude&quot;</Str>
+      {"\n"}
+      <K>model</K>
+      <Eq />
+      <Str>&quot;claude-opus-4-8&quot;</Str>
     </pre>
+  );
+}
+
+/** Inline styles for the run-TUI transcript. */
+const Mint = ({ children }: { children: ReactNode }) => (
+  <span className="text-mint">{children}</span>
+);
+const Coral = ({ children }: { children: ReactNode }) => (
+  <span className="text-coral">{children}</span>
+);
+const Sky = ({ children }: { children: ReactNode }) => (
+  <span className="text-sky">{children}</span>
+);
+const Bold = ({ children }: { children: ReactNode }) => (
+  <span className="font-semibold text-paper">{children}</span>
+);
+const Dim = ({ children }: { children: ReactNode }) => (
+  <span className="text-paper/[0.4]">{children}</span>
+);
+const Hypo = ({ children }: { children: ReactNode }) => (
+  <span className="italic text-paper/[0.6]">{children}</span>
+);
+const Trace = ({ children }: { children: ReactNode }) => (
+  <span className="text-sky/[0.55]">{children}</span>
+);
+
+/**
+ * A static frame of the `hillclimber run` dashboard. Mirrors the real TUI
+ * (milestone history above a transient live region) with comment-style
+ * annotations explaining each phase — the real thing redraws in place.
+ */
+function RunTui() {
+  return (
+    <div className="h-[360px] overflow-auto">
+      <pre className="m-0 whitespace-pre px-6 py-[22px] font-mono text-[12.5px] font-medium leading-[1.85] text-paper/[0.9] select-text">
+        <Mint>$</Mint> hillclimber run{"\n\n"}
+        <Comment>
+          # preflight — score the untouched artefact, check models
+        </Comment>
+        {"\n"}
+        <Mint>✓</Mint> baseline <Bold>0.712</Bold>
+        {"\n"}
+        <Mint>✓</Mint> models verified{"\n"}
+        <Mint>✓</Mint> strategy: <Bold>chain</Bold>
+        {"\n\n"}
+        <Comment>
+          # each cycle: propose → apply → score, keep what climbs
+        </Comment>
+        {"\n"}
+        <Sky>◆</Sky> <Bold>cycle 001:</Bold>{" "}
+        <Hypo>Strip markup before matching field boundaries</Hypo>
+        {"\n"}
+        <Mint>▴</Mint> cycle 001 scored <Bold>0.781</Bold> <Mint>(+0.069)</Mint>
+        {"\n"}
+        <Sky>◆</Sky> <Bold>cycle 002:</Bold>{" "}
+        <Hypo>Fuzzy-match malformed date fields</Hypo>
+        {"\n"}
+        <Coral>▾</Coral> cycle 002 scored <Bold>0.774</Bold>{" "}
+        <Coral>(-0.007)</Coral>
+        {"\n"}
+        <Sky>◆</Sky> <Bold>cycle 003:</Bold>{" "}
+        <Hypo>Normalize unicode before matching fields</Hypo>
+        {"\n\n"}
+        <Comment>
+          # live status — redraws in place, gone when the run ends
+        </Comment>
+        {"\n"}
+        <Sky>⠹</Sky> <Bold>cycle 3/5 — applying the hypothesis</Bold>
+        {"           "}
+        <Dim>12:47</Dim>
+        {"\n"}
+        {"  "}
+        <Sky>baseline 0.712</Sky>
+        <Dim>{"  ·  "}</Dim>
+        <Mint>best 0.781</Mint>
+        {"\n"}
+        {"  "}
+        <Dim>│</Dim> <Trace>Read(file_path=&apos;src/extract.py&apos;)</Trace>
+        {"\n"}
+        {"  "}
+        <Dim>│</Dim>{" "}
+        <Trace>Edit(file_path=&apos;src/extract.py&apos;, old_string=…)</Trace>
+        {"\n"}
+        {"  "}
+        <Dim>│</Dim> <Dim>tool returned: ok</Dim>
+      </pre>
+    </div>
   );
 }
 
@@ -122,15 +231,19 @@ export function HowItWorks() {
         <div className="grid grid-cols-1 items-start gap-14 md:grid-cols-[1fr_1px_1fr] md:gap-[56px]">
           {/* 01 — Define */}
           <div>
-            <StepHeading numeral="01" kicker="Define" title="Write a spec file" />
+            <StepHeading
+              numeral="01"
+              kicker="Define"
+              title="Write a spec file"
+            />
             <div className="select-none overflow-hidden rounded-[14px] border border-white/10 bg-card shadow-[0_24px_60px_rgba(0,0,0,0.4)]">
-              <WindowBar filename="spec.toml" />
+              <WindowBar filename="hillclimber.toml" />
               <SpecToml />
             </div>
             <p className="mt-7 text-[16px] leading-[1.65] text-paper/[0.6]">
-              A spec is a plain-text declaration of intent — your goal, the metric
-              to optimize, the budget, and which models to use. No glue code, no
-              orchestration. Just describe the hill you want to climb.
+              A spec is a plain-text declaration of intent — your goal, the
+              metric to optimize, the budget, and which models to use. No glue
+              code, no orchestration. Just describe the hill you want to climb.
             </p>
           </div>
 
@@ -139,18 +252,21 @@ export function HowItWorks() {
 
           {/* 02 — Execute */}
           <div>
-            <StepHeading numeral="02" kicker="Execute" title="Run hillclimber" />
-            <p className="mb-7 text-[16px] leading-[1.65] text-paper/[0.6]">
-              hillclimber reads your spec and takes over — generating candidate
-              changes, running each in an isolated git branch, scoring it against
-              your metric, and keeping only what improves. Watch it climb in real
-              time.
-            </p>
-            <div className="flex aspect-[16/11] w-full items-center justify-center rounded-[14px] border border-white/10 bg-card shadow-[0_24px_60px_rgba(0,0,0,0.4)]">
-              <span className="font-mono text-[13px] text-paper/[0.3]">
-                Drop run / TUI screenshot
-              </span>
+            <StepHeading
+              numeral="02"
+              kicker="Execute"
+              title="Run hillclimber"
+            />
+            <div className="select-none overflow-hidden rounded-[14px] border border-white/10 bg-card shadow-[0_24px_60px_rgba(0,0,0,0.4)]">
+              <WindowBar filename="~/my_repo" />
+              <RunTui />
             </div>
+            <p className="mt-7 text-[16px] leading-[1.65] text-paper/[0.6]">
+              hillclimber reads your spec and takes over — generating candidate
+              changes, running each in an isolated git branch, scoring it
+              against your metric, and keeping only what improves. Watch it
+              climb in real time.
+            </p>
           </div>
         </div>
       </div>

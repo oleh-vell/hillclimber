@@ -23,6 +23,28 @@ export function LinkIcon({
   );
 }
 
+/** Up-right arrow — external-link affordance on the GitHub button. */
+export function ArrowUpRightIcon({
+  strokeWidth = 1.8,
+  ...props
+}: SVGProps<SVGSVGElement> & { strokeWidth?: number }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={strokeWidth}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      {...props}
+    >
+      <line x1="7" y1="17" x2="17" y2="7" />
+      <polyline points="8 7 17 7 17 16" />
+    </svg>
+  );
+}
+
 /** Solid GitHub mark for the primary CTA. */
 export function GithubMark(props: SVGProps<SVGSVGElement>) {
   return (

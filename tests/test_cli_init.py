@@ -23,6 +23,8 @@ from hillclimber.cli.commands import init as init_cmd
 from hillclimber.config import HILLCLIMBER_TOML, load_config
 from hillclimber.models import CommandScorer
 from hillclimber.scoring import score_artefact
+from strategies.chain import Chain
+from strategies.registry import verify_agents
 
 runner = CliRunner()
 
@@ -47,10 +49,13 @@ def test_scaffolded_toml_is_a_valid_config(tmp_path: Path):
     config = load_config(tmp_path)
     assert config.strategy == "chain"
     assert config.scorer.cmd == "python eval.py"
-    # Role prompts were left out of the toml, so the defaults must fill in.
-    assert config.hillclimber_agent.system_prompt
-    assert config.worker_agent.system_prompt
-    assert config.reflector_agent.system_prompt
+    # The scaffold defines exactly the roles the chain strategy declares, so
+    # verify_agents is clean: nothing missing, nothing unused.
+    assert set(config.agents) == set(Chain.roles)
+    assert verify_agents(config) == []
+    # Role prompts are left out of the toml; the strategy fills its defaults at
+    # access time (see Strategy._role_agent), so the loaded config keeps None.
+    assert all(agent.system_prompt is None for agent in config.agents.values())
 
 
 def test_scaffolded_eval_is_stdlib_only(tmp_path: Path):
@@ -118,9 +123,9 @@ def test_interactive_answers_land_in_the_toml(tmp_path: Path):
     config = load_config(tmp_path)
     assert config.budget.cycles == 10
     assert config.goal.target == 0.9
-    assert config.hillclimber_agent.model == "claude-opus-4-8"
-    assert config.worker_agent.model == "claude-opus-4-8"
-    assert config.reflector_agent.model == "claude-opus-4-8"
+    # The chosen model lands in every scaffolded role.
+    assert config.agents
+    assert all(agent.model == "claude-opus-4-8" for agent in config.agents.values())
 
 
 def test_interactive_declining_the_cwd_asks_for_a_path(tmp_path: Path, monkeypatch):

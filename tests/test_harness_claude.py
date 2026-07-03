@@ -10,7 +10,7 @@ import hillclimber  # noqa: F401
 from harnesses import ClaudeHarness, Harness, TraceEvent, get_harness
 from harnesses.base import HarnessError
 from harnesses.claude import HarnessRun, _build_command, _build_verify_command, _parse_trace_line, run
-from hillclimber.models import Agent, Budget, CommandScorer, Config
+from hillclimber.models import Agent
 from sandboxes import PassthroughSandbox
 
 
@@ -142,7 +142,13 @@ def test_run_streams_trace_events_in_order_and_returns_result(monkeypatch):
 
 def test_get_harness_returns_claude():
     assert isinstance(get_harness("claude", PassthroughSandbox()), ClaudeHarness)
-    assert isinstance(get_harness("claude_code", PassthroughSandbox()), ClaudeHarness)
+
+
+@pytest.mark.parametrize("alias", ["claude code", "claude_code", "claude-code", "Claude Code", " CLAUDE "])
+def test_get_harness_accepts_claude_spelling_aliases(alias: str):
+    # "claude" and "claude code" name the same harness; case, surrounding
+    # whitespace, and the space/hyphen/underscore choice are all spelling.
+    assert isinstance(get_harness(alias, PassthroughSandbox()), ClaudeHarness)
 
 
 def test_get_harness_rejects_unknown():
@@ -257,16 +263,8 @@ def test_verify_model_raises_harness_error_on_unparsable_output(monkeypatch):
         asyncio.run(harness.verify_model("opus"))
 
 
-def _config_with_models(*models: str) -> Config:
-    agents = [Agent(harness="claude", model=m) for m in models]
-    return Config(
-        path_to_artefact=".",
-        scorer=CommandScorer(cmd="true"),
-        budget=Budget(cycles=1),
-        hillclimber_agent=agents[0],
-        worker_agent=agents[1],
-        reflector_agent=agents[2],
-    )
+def _agents(*models: str) -> list[Agent]:
+    return [Agent(harness="claude", model=m) for m in models]
 
 
 def test_verify_probes_each_distinct_model_once(monkeypatch):
@@ -277,19 +275,19 @@ def test_verify_probes_each_distinct_model_once(monkeypatch):
 
     monkeypatch.setattr(ClaudeHarness, "verify_model", _fake_verify_model)
     harness = ClaudeHarness(PassthroughSandbox())
-    # Two roles share "m"; only the distinct set is probed, order preserved.
-    asyncio.run(harness.verify(_config_with_models("m", "m", "other")))
-    assert calls == ["m", "other"]
+    # Two agents share "m"; only the distinct set is probed.
+    asyncio.run(harness.verify(_agents("m", "m", "other")))
+    assert sorted(calls) == ["m", "other"]
 
 
-def test_verify_aborts_on_first_failing_model(monkeypatch):
+def test_verify_raises_on_a_failing_model(monkeypatch):
     async def _fake_verify_model(self, model: str) -> None:
         raise HarnessError(f"cannot run {model!r}")
 
     monkeypatch.setattr(ClaudeHarness, "verify_model", _fake_verify_model)
     harness = ClaudeHarness(PassthroughSandbox())
     with pytest.raises(HarnessError, match="cannot run 'm'"):
-        asyncio.run(harness.verify(_config_with_models("m", "m", "m")))
+        asyncio.run(harness.verify(_agents("m", "m", "m")))
 
 
 # --------------------------------------------------------------------------- #

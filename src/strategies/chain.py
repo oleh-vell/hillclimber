@@ -14,13 +14,29 @@ from hillclimber.models import Config, Cycle, CycleStatus, CycleSummary, Experim
 from hillclimber.progress import RunEvent
 from hillclimber.scoring import score_artefact
 from hillclimber.telemetry import get_logger
-from strategies.base import CycleRecord, Strategy
+from strategies import prompt
+from strategies.base import CycleRecord, RoleSpec, Strategy
 
 logger = get_logger(__name__)
 
 
 class Chain(Strategy):
     """Run cycles in sequence, recording the best so far."""
+
+    # The chain drives two roles per cycle: the orchestrator proposes, the
+    # worker applies. No reflector yet — the reflect step is scaffolded but not
+    # wired into ``execute``, so declaring it would force users to configure an
+    # agent that never runs (re-add it here when the step lands).
+    roles = {
+        "orchestrator": RoleSpec(
+            default_prompt=prompt.ORCHESTRATOR_AGENT,
+            description="Proposes the next hypothesis for improving the artefact.",
+        ),
+        "worker": RoleSpec(
+            default_prompt=prompt.WORKER_AGENT,
+            description="Applies the proposed change to the artefact.",
+        ),
+    }
 
     async def one_cycle(
         self,
@@ -33,7 +49,7 @@ class Chain(Strategy):
         """Run a single climb cycle: propose -> apply -> record.
 
         One cycle is one hypothesis iteration in its own worktree (see ``Cycle``):
-        branch off the parent, ask the hillclimber agent for a hypothesis, record
+        branch off the parent, ask the orchestrator agent for a hypothesis, record
         it in a ``.lock``, let the worker agent apply it in a fresh context,
         commit the worker's edits (the sandboxed worker cannot run git itself),
         then score that committed result and fold it back into the lock.
@@ -68,7 +84,7 @@ class Chain(Strategy):
         # actually produced a new commit.
         base_sha = await head_sha(worktree)
 
-        # 2. Ask the hillclimber agent for one hypothesis. [HARNESS SEAM]
+        # 2. Ask the orchestrator agent for one hypothesis. [HARNESS SEAM]
         hypothesis = await self._propose_hypothesis(config, worktree, index)
         logger.debug("cycle %d: hypothesis: %s", index, hypothesis)
 
@@ -121,9 +137,10 @@ class Chain(Strategy):
         return cycle
 
     async def _propose_hypothesis(self, config: Config, worktree: str, index: int) -> str:
-        """Ask the hillclimber agent for one hypothesis, via the harness.
+        """Ask the orchestrator agent for one hypothesis, via the harness.
 
-        Drives ``config.hillclimber_agent`` (its model and system prompt) against
+        Drives the ``orchestrator`` role's agent (its model and system prompt,
+        see ``_role_agent``) against
         the artefact checkout in ``worktree`` through ``self.harness`` and returns
         the proposed change as text. The prompt is primed with the experiment's
         past cycles (see ``_cycle_records`` / ``_render_history``) so each
@@ -141,12 +158,8 @@ class Chain(Strategy):
         Returns:
             The proposed hypothesis as plain text.
         """
-        agent = config.hillclimber_agent
-        # Config fills each role's prompt default, so this is always set; guard
-        # the invariant rather than smuggle an empty prompt to the agent.
-        if agent.system_prompt is None:
-            raise RuntimeError("hillclimber agent is missing a system prompt")
-
+        agent = self._role_agent(config, "orchestrator")
+        assert agent.system_prompt is not None  # resolved by _role_agent
         self.progress_sink(
             RunEvent(
                 kind="cycle_stage",
@@ -170,13 +183,14 @@ class Chain(Strategy):
                 path=worktree,
                 model=agent.model,
             ),
-            on_trace=self._make_trace_sink(f"cycle {index:03d}/hillclimber"),
+            on_trace=self._make_trace_sink(f"cycle {index:03d}/orchestrator"),
         )
 
     async def _apply_hypothesis(self, config: Config, cycle: Cycle, worktree: str) -> None:
         """Run the worker agent to apply ``cycle.hypothesis``.
 
-        Drives ``config.worker_agent`` (its model and system prompt) in a fresh
+        Drives the ``worker`` role's agent (its model and system prompt, see
+        ``_role_agent``) in a fresh
         context through ``self.harness`` to apply ``cycle.hypothesis`` inside
         ``worktree``. The worker only edits — the sandbox denies it git (the
         worktree's metadata lives in the parent repo, outside the boundary), so
@@ -198,12 +212,8 @@ class Chain(Strategy):
             cycle: The running cycle; ``cycle.hypothesis`` is the change to apply.
             worktree: The cycle's checkout the worker edits and commits in.
         """
-        agent = config.worker_agent
-        # Config fills each role's prompt default, so this is always set; guard
-        # the invariant rather than smuggle an empty prompt to the agent.
-        if agent.system_prompt is None:
-            raise RuntimeError("worker agent is missing a system prompt")
-
+        agent = self._role_agent(config, "worker")
+        assert agent.system_prompt is not None  # resolved by _role_agent
         self.progress_sink(
             RunEvent(
                 kind="cycle_stage",

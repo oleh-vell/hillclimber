@@ -20,7 +20,7 @@ from typing import Literal
 from pydantic import BaseModel
 
 # The stages a cycle moves through, in order (see ``strategies.chain``): the
-# hillclimber agent proposes, the worker applies, the scorer measures.
+# orchestrator agent proposes, the worker applies, the scorer measures.
 CycleStage = Literal["proposing", "applying", "scoring"]
 
 

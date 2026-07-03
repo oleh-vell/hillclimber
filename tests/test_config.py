@@ -22,13 +22,10 @@ kind = "command"
 cmd = "true"
 [budget]
 cycles = 1
-[hillclimber_agent]
+[agents.orchestrator]
 harness = "claude"
 model = "m"
-[worker_agent]
-harness = "claude"
-model = "m"
-[reflector_agent]
+[agents.worker]
 harness = "claude"
 model = "m"
 """
@@ -66,11 +63,18 @@ def test_absolute_scorer_path_is_rejected(tmp_path: Path):
     body = (
         f'[scorer]\nkind = "command"\ncmd = "python {abs_path}/eval.py"\n'
         "[budget]\ncycles = 1\n"
-        '[hillclimber_agent]\nharness = "claude"\nmodel = "m"\n'
-        '[worker_agent]\nharness = "claude"\nmodel = "m"\n'
-        '[reflector_agent]\nharness = "claude"\nmodel = "m"\n'
+        '[agents.orchestrator]\nharness = "claude"\nmodel = "m"\n'
+        '[agents.worker]\nharness = "claude"\nmodel = "m"\n'
     )
     with pytest.raises(ValueError, match="relative to the artefact root"):
+        load_config(_write(tmp_path, body))
+
+
+def test_legacy_agent_tables_are_rejected_with_a_rename_hint(tmp_path: Path):
+    # A pre-rename config would otherwise load with agents={} and fail later
+    # with a confusing missing-role error; catch it at load with a hint.
+    body = _BASE_TOML + '[hillclimber_agent]\nharness = "claude"\nmodel = "m"\n'
+    with pytest.raises(ValueError, match=r"\[hillclimber_agent\] -> \[agents.orchestrator\]"):
         load_config(_write(tmp_path, body))
 
 
@@ -82,8 +86,6 @@ def test_relative_scorer_path_is_accepted():
         path_to_artefact="/some/abs/artefact",
         scorer=CommandScorer(cmd="uv run python eval.py"),
         budget=Budget(cycles=1),
-        hillclimber_agent=agent,
-        worker_agent=agent,
-        reflector_agent=agent,
+        agents={"orchestrator": agent, "worker": agent},
     )
     assert config.scorer.cmd == "uv run python eval.py"

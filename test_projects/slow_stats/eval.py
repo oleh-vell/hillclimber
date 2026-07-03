@@ -133,5 +133,5 @@ def evaluate() -> hillclimber.Eval:
 
 if __name__ == "__main__":
     # The runner scores by reading the last JSON line on stdout (see
-    # hillclimber.scoring._parse_eval). Keep the Eval the last thing printed.
+    # hillclimber.scoring.parse_eval). Keep the Eval the last thing printed.
     print(evaluate().model_dump_json())

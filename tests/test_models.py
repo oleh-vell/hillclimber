@@ -29,9 +29,7 @@ def _config_data(**overrides: object) -> dict:
         "path_to_artefact": ".",
         "scorer": {"kind": "command", "cmd": "true"},
         "budget": {"cycles": 1},
-        "hillclimber_agent": agent,
-        "worker_agent": agent,
-        "reflector_agent": agent,
+        "agents": {"orchestrator": agent, "worker": agent},
     }
     data.update(overrides)
     return data

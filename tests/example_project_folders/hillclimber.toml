@@ -20,16 +20,11 @@ kind = "command"
 cmd = "python eval.py"
 
 # Proposes the next hypothesis for improving the artefact.
-[hillclimber_agent]
+[agents.orchestrator]
 harness = "claude"
 model = "claude-opus-4-8"
 
 # Applies the proposed change to the artefact.
-[worker_agent]
-harness = "claude"
-model = "claude-opus-4-8"
-
-# Reflects on the score delta and steers the next hypothesis.
-[reflector_agent]
+[agents.worker]
 harness = "claude"
 model = "claude-opus-4-8"

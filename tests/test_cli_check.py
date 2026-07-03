@@ -23,13 +23,10 @@ kind = "command"
 cmd = "{cmd}"
 [budget]
 cycles = 1
-[hillclimber_agent]
+[agents.orchestrator]
 harness = "claude"
 model = "m"
-[worker_agent]
-harness = "claude"
-model = "m"
-[reflector_agent]
+[agents.worker]
 harness = "claude"
 model = "m"
 """
@@ -96,6 +93,46 @@ def test_check_fails_on_a_score_line_missing_the_marker(tmp_path: Path):
 
     assert result.exit_code == 1
     assert json.loads(result.output)["ok"] is False
+
+
+def test_check_fails_on_a_missing_required_agent(tmp_path: Path):
+    # Drop the worker table: the strategy can't run without it, so check fails
+    # with the actionable per-role message.
+    toml = _TOML.format(cmd="cat eval_out").replace('[agents.worker]\nharness = "claude"\nmodel = "m"\n', "")
+    (tmp_path / "hillclimber.toml").write_text(toml)
+    (tmp_path / "eval_out").write_text('{"hillclimber_eval": 1, "score": 0.42}\n')
+
+    result = runner.invoke(app, ["check", str(tmp_path)])
+
+    assert result.exit_code == 1
+    # Asserted in two pieces: rich line-wraps the message at the console width.
+    assert 'strategy "chain" requires agent "worker"' in result.output
+    assert "[agents.worker]" in result.output
+
+
+def test_check_json_reports_a_missing_agent(tmp_path: Path):
+    toml = _TOML.format(cmd="true").replace('[agents.worker]\nharness = "claude"\nmodel = "m"\n', "")
+    (tmp_path / "hillclimber.toml").write_text(toml)
+
+    result = runner.invoke(app, ["--json", "check", str(tmp_path)])
+
+    assert result.exit_code == 1
+    payload = json.loads(result.output)
+    assert payload["ok"] is False
+    assert "requires agent" in payload["error"]
+
+
+def test_check_warns_but_passes_on_an_unused_agent(tmp_path: Path):
+    # An extra [agents.reflector] costs nothing at runtime: warn and continue.
+    toml = _TOML.format(cmd="cat eval_out") + '[agents.reflector]\nharness = "claude"\nmodel = "m"\n'
+    (tmp_path / "hillclimber.toml").write_text(toml)
+    (tmp_path / "eval_out").write_text('{"hillclimber_eval": 1, "score": 0.42}\n')
+
+    result = runner.invoke(app, ["check", str(tmp_path)])
+
+    assert result.exit_code == 0
+    assert 'does not use agent "reflector"' in result.output
+    assert "ready to climb" in result.output
 
 
 def test_check_fails_without_a_config(tmp_path: Path):

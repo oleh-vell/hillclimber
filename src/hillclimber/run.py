@@ -27,7 +27,7 @@ from hillclimber.progress import RunEvent, RunEventSink, ignore_progress
 from hillclimber.scoring import score_artefact
 from hillclimber.telemetry import get_logger
 from sandboxes import get_sandbox
-from strategies.chain import Chain
+from strategies.registry import get_strategy, verify_agents
 
 logger = get_logger(__name__)
 
@@ -67,12 +67,14 @@ async def run(
     logger.info(
         "artefact=%s strategy=%s budget=%d cycles", config.path_to_artefact, config.strategy, config.budget.cycles
     )
+    # A missing strategy role raises here; an unused agent table only warns.
+    for warning in verify_agents(config):
+        logger.warning(warning)
 
     # Cycles fork from committed state, so a dirty artefact would have the baseline
     # (scored on the working tree) and the cycles (forked from HEAD) measure
-    # different code. By default, refuse to start rather than silently diverge;
-    # with ``auto_commit`` set, snapshot the dirty tree into a commit and climb
-    # from that instead (see ``create_snapshot_commit``).
+    # different code. Refuse to start rather than silently diverge; with
+    # ``auto_commit`` set, snapshot the dirty tree into a commit and climb from that.
     if await check_uncommitted_changes(config.path_to_artefact):
         if config.auto_commit:
             await create_snapshot_commit(config.path_to_artefact, "hillclimber: snapshot uncommitted changes")
@@ -83,20 +85,21 @@ async def run(
                 "or set auto_commit = true to snapshot them automatically"
             )
 
+    # The sandbox confines every agent CLI to its worktree; the strategy
+    # threads it down into the harness.
+    sandbox = get_sandbox(config.sandbox)
+    strategy = get_strategy(config.strategy)(sandbox, trace_sink=trace_sink, progress_sink=progress_sink)
+    # Preflight before scoring: a bad model alias or an unauthed CLI fails here,
+    # not after the baseline eval has been paid for. Only the strategy's roles
+    # are probed — an unused agent table is ignored, as verify_agents promised.
+    logger.info("verifying harness can run the configured models")
+    emit(RunEvent(kind="preflight_start", message="verifying the configured models"))
+    await strategy.harness.verify(config.agents[role] for role in type(strategy).roles)
+    emit(RunEvent(kind="preflight_done", message="models verified"))
+
     emit(RunEvent(kind="baseline_start", message="scoring the baseline"))
     baseline = await get_baseline_score(config)
     emit(RunEvent(kind="baseline_done", message=f"baseline scored {baseline.value:.3f}", score=baseline.value))
-    # Build the OS sandbox that confines every agent CLI to its worktree and
-    # hand it to the strategy, which threads it down into the harness.
-    sandbox = get_sandbox(config.sandbox)
-    strategy = Chain(sandbox, trace_sink=trace_sink, progress_sink=progress_sink)
-    # Preflight: prove the harness can actually run the configured models before
-    # spending a climb on worktrees and scoring. A bad model alias or an unauthed
-    # CLI fails here (cheaply) rather than on the first cycle.
-    logger.info("verifying harness can run the configured models")
-    emit(RunEvent(kind="preflight_start", message="verifying the configured models"))
-    await strategy.harness.verify(config)
-    emit(RunEvent(kind="preflight_done", message="models verified"))
     status = await strategy.execute(config, baseline)
     logger.info("experiment finished: %d/%d cycles run", status.completed, status.total)
     return status

@@ -23,9 +23,7 @@ def _config(path: Path) -> Config:
         path_to_artefact=str(path),
         scorer=CommandScorer(cmd="pytest test_eval.py"),
         budget=Budget(cycles=1),
-        hillclimber_agent=_agent(),
-        worker_agent=_agent(),
-        reflector_agent=_agent(),
+        agents={"orchestrator": _agent(), "worker": _agent()},
     )
 
 
@@ -100,13 +98,10 @@ kind = "command"
 cmd = "true"
 [budget]
 cycles = 1
-[hillclimber_agent]
+[agents.orchestrator]
 harness = "claude"
 model = "m"
-[worker_agent]
-harness = "claude"
-model = "m"
-[reflector_agent]
+[agents.worker]
 harness = "claude"
 model = "m"
 """
@@ -136,7 +131,7 @@ def test_run_snapshots_a_dirty_artefact_when_auto_commit_set(tmp_path: Path):
     # Same dirty repo, but auto_commit opts into snapshotting instead of refusing.
     _git("init", cwd=tmp_path)
     # Inject the top-level auto_commit key before the first table so it doesn't
-    # land inside [reflector_agent].
+    # land inside [agents.worker].
     toml = _GUARD_TOML.format(path=tmp_path).replace("[scorer]", "auto_commit = true\n[scorer]", 1)
     (tmp_path / "hillclimber.toml").write_text(toml)
     (tmp_path / "a.txt").write_text("x\n")
@@ -164,13 +159,10 @@ cmd = "echo '{\\"hillclimber_eval\\": 1, \\"score\\": 0.42}'"
 cycles = 0
 [sandbox]
 kind = "none"
-[hillclimber_agent]
+[agents.orchestrator]
 harness = "claude"
 model = "m"
-[worker_agent]
-harness = "claude"
-model = "m"
-[reflector_agent]
+[agents.worker]
 harness = "claude"
 model = "m"
 """
@@ -192,7 +184,7 @@ def test_run_emits_baseline_and_preflight_progress_events(tmp_path: Path, monkey
     events: list[RunEvent] = []
     status = asyncio.run(hillclimber.run(tmp_path, progress_sink=events.append))
 
-    assert [e.kind for e in events] == ["baseline_start", "baseline_done", "preflight_start", "preflight_done"]
-    baseline_done = events[1]
+    assert [e.kind for e in events] == ["preflight_start", "preflight_done", "baseline_start", "baseline_done"]
+    baseline_done = events[3]
     assert baseline_done.score == pytest.approx(0.42)
     assert status.completed == 0

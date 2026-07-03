@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
+from rich.markup import escape
 
 from harnesses import HarnessError
 from hillclimber.cli import render
@@ -68,7 +69,8 @@ def run(
         # traceback for debugging.
         if state.verbose:
             raise
-        err_console.print(f"[red]error:[/] {exc}")
+        # escape(): the message may quote literal [brackets] like toml table names.
+        err_console.print(f"[red]error:[/] {escape(str(exc))}")
         raise typer.Exit(code=1) from exc
 
     if state.json:

@@ -26,12 +26,12 @@ function WhyCard() {
             and goals, you risk burning tokens and losing control.
           </p>
           <p className="mt-5 text-[14.5px] leading-[1.85] text-paper/[0.82]">
-            <span className="text-mint/[0.65]"># </span>I built hillclimber to do
-            two things:
+            <span className="text-mint/[0.65]"># </span>I built hillclimber to
+            do two things:
           </p>
           <p className="ml-5 mt-3 text-[14.5px] leading-[1.85] text-paper/[0.7]">
-            <span className="text-mint">1.</span> Force you to be explicit upfront
-            — what you want, and how much you&apos;re willing to spend.
+            <span className="text-mint">1. </span> Force you to be explicit
+            upfront — what you want, and how much you&apos;re willing to spend.
           </p>
           <p className="ml-5 mt-[6px] text-[14.5px] leading-[1.85] text-paper/[0.7]">
             <span className="text-mint">2.</span> Leave you free to choose any

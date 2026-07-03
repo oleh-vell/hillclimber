@@ -21,11 +21,13 @@ from pathlib import Path
 from typing import Annotated, NoReturn
 
 import typer
+from rich.markup import escape
 
 from hillclimber.cli.console import console, err_console
 from hillclimber.cli.state import CLIState
 from hillclimber.config import load_config
 from hillclimber.scoring import parse_eval, run_scorer_command
+from strategies.registry import get_strategy, verify_agents
 
 # How much of the scorer's output to show when diagnosing a failure — enough to
 # see the traceback or the stray print, without flooding the terminal.
@@ -63,14 +65,15 @@ def _has_unmarked_score_line(stdout: str) -> bool:
     return False
 
 
-def _fail(state: CLIState, error: str, hint: str | None = None) -> NoReturn:
-    """Report a failed check and exit 1."""
+def _fail(state: CLIState, error: str, hint: str | None = None, warnings: list[str] | None = None) -> NoReturn:
+    """Report a failed check (plus any warnings gathered before it) and exit 1."""
     if state.json:
-        console.print_json(json.dumps({"ok": False, "error": error}))
+        console.print_json(json.dumps({"ok": False, "error": error, "warnings": warnings or []}))
     else:
-        err_console.print(f"[red]✗[/] {error}")
+        # escape(): the message may quote literal [brackets] like toml table names.
+        err_console.print(f"[red]✗[/] {escape(error)}")
         if hint:
-            err_console.print(f"[yellow]hint:[/] {hint}")
+            err_console.print(f"[yellow]hint:[/] {escape(hint)}")
     raise typer.Exit(code=1)
 
 
@@ -90,7 +93,19 @@ def check(
     if not state.json:
         console.print(f"[green]✓[/] config loaded (scorer: [bold]{config.scorer.cmd}[/])")
 
-    # 2. The command runs — in the artefact dir, exactly as the baseline would.
+    # 2. The agents cover the strategy's declared roles. A missing role is fatal
+    #    (the run couldn't start either); an unused one only warns.
+    try:
+        agent_warnings = verify_agents(config)
+    except ValueError as exc:
+        _fail(state, str(exc))
+    if not state.json:
+        for warning in agent_warnings:
+            err_console.print(f"[yellow]warning:[/] {escape(warning)}")
+        roles = ", ".join(get_strategy(config.strategy).roles)
+        console.print(f'[green]✓[/] agents cover strategy "{config.strategy}" ({roles})')
+
+    # 3. The command runs — in the artefact dir, exactly as the baseline would.
     started = time.perf_counter()
     returncode, stdout, stderr = asyncio.run(run_scorer_command(config.scorer, config.path_to_artefact))
     elapsed = time.perf_counter() - started
@@ -102,11 +117,11 @@ def check(
                 "the scorer runs in your shell's environment; whatever `python` resolves to there "
                 "must be able to import everything eval.py uses"
             )
-        _fail(state, f"scorer exited {returncode} after {elapsed:.1f}s", hint)
+        _fail(state, f"scorer exited {returncode} after {elapsed:.1f}s", hint, warnings=agent_warnings)
     if not state.json:
         console.print(f"[green]✓[/] scorer ran (exit 0, {elapsed:.1f}s)")
 
-    # 3. The output carries a valid envelope.
+    # 4. The output carries a valid envelope.
     try:
         evaluation = parse_eval(stdout)
     except ValueError as exc:
@@ -117,12 +132,18 @@ def check(
                 'found a JSON line with a "score" but no marker — add "hillclimber_eval": 1 to the '
                 "object your eval prints"
             )
-        _fail(state, str(exc), hint)
+        _fail(state, str(exc), hint, warnings=agent_warnings)
 
     if state.json:
         console.print_json(
             json.dumps(
-                {"ok": True, "score": evaluation.score, "details": evaluation.details, "elapsed_s": round(elapsed, 3)}
+                {
+                    "ok": True,
+                    "score": evaluation.score,
+                    "details": evaluation.details,
+                    "elapsed_s": round(elapsed, 3),
+                    "warnings": agent_warnings,
+                }
             )
         )
         return

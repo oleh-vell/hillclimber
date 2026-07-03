@@ -15,15 +15,16 @@ consumer (a logger today, the CLI's live view later) render any backend's run.
 
 from __future__ import annotations
 
+import asyncio
 from abc import ABC, abstractmethod
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel
 
 if TYPE_CHECKING:
     from harnesses.claude import HarnessRun
-    from hillclimber.models import Config
+    from hillclimber.models import Agent
 
 
 class TraceEvent(BaseModel):
@@ -96,36 +97,21 @@ class Harness(ABC):
         """
         ...
 
-    async def verify(self, config: Config) -> None:
-        """Preflight: confirm this harness can run every model ``config`` asks of it.
+    async def verify(self, agents: Iterable[Agent]) -> None:
+        """Preflight: confirm this harness can run every model ``agents`` ask of it.
 
         Called once before a climb spends any real work (see ``hillclimber.run``),
-        so a mistyped model alias or a broken/unauthed CLI fails fast instead of
-        after minutes of scoring and worktree churn. Each *distinct* model across
-        the config's three role agents is probed once, in order, via
-        :meth:`verify_model`; the first that fails aborts the whole preflight.
-
-        The contract is that this stays **cheap**: :meth:`verify_model` must be a
-        trivial backend round-trip, never real agent work (see its docstring). v1
-        drives every agent through one harness (see ``Strategy.__init__``), so
-        this checks all three role models; when per-``Agent.harness`` selection
-        lands, a harness will verify only the agents routed to it.
-
-        Args:
-            config: The validated experiment config whose role-agent models are
-                probed.
+        so a mistyped model alias or a broken/unauthed CLI fails fast. Callers
+        pass only the agents the strategy will actually drive — a configured but
+        unused ``[agents.<role>]`` table must not abort a run. Each distinct
+        model is probed once, concurrently, via :meth:`verify_model` (which must
+        stay a trivial backend round-trip, never real agent work).
 
         Raises:
             HarnessError: If any model can't be run by this harness.
         """
-        # Dedupe while preserving order: the three roles usually share one model,
-        # so this collapses to a single probe in the common case.
-        seen: list[str] = []
-        for agent in (config.hillclimber_agent, config.worker_agent, config.reflector_agent):
-            if agent.model not in seen:
-                seen.append(agent.model)
-        for model in seen:
-            await self.verify_model(model)
+        models = dict.fromkeys(agent.model for agent in agents)
+        await asyncio.gather(*(self.verify_model(model) for model in models))
 
     @abstractmethod
     async def verify_model(self, model: str) -> None:

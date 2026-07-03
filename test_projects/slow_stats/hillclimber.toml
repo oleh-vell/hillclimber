@@ -2,14 +2,8 @@
 # Run it with a multi-cycle budget and watch the score rise as each cycle
 # removes a bottleneck (trial-division primes, O(n^2) distinct, .count-per-value
 # top-K) without changing any of the computed values.
-path_to_artefact = "/Users/oleh/projects/hillclimber/test_projects/slow_stats"
+path_to_artefact = "."
 strategy = "chain"
-
-# Fitness function: run the eval, whose evaluate() returns a hillclimber.Eval.
-# score = correctness * speed, so faster (still-correct) code scores higher.
-[scorer]
-kind = "command"
-cmd = "python eval.py"
 
 # Maximize the score. The target is 1.0, which the speed term only approaches
 # asymptotically — so the climb never early-stops and spends its whole budget.
@@ -21,17 +15,18 @@ target = 1.0
 [budget]
 cycles = 3
 
+# Fitness function: run the eval, whose evaluate() returns a hillclimber.Eval.
+# score = correctness * speed, so faster (still-correct) code scores higher.
+[scorer]
+kind = "command"
+cmd = "python eval.py"
+
 # Proposes the next hypothesis for speeding up the pipeline.
-[hillclimber_agent]
-harness = "api"
+[agents.orchestrator]
+harness = "claude"
 model = "claude-sonnet-4-6"
 
 # Applies the proposed change to the artefact.
-[worker_agent]
-harness = "api"
-model = "claude-sonnet-4-6"
-
-# Reflects on the score delta and steers the next hypothesis.
-[reflector_agent]
-harness = "api"
+[agents.worker]
+harness = "claude"
 model = "claude-sonnet-4-6"

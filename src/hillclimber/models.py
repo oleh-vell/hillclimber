@@ -22,8 +22,6 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from strategies import prompt
-
 # --------------------------------------------------------------------------- #
 # Shared value types
 # --------------------------------------------------------------------------- #
@@ -40,15 +38,16 @@ class CycleStatus(StrEnum):
 
 
 class Agent(BaseModel):
-    """A reusable agent configuration. Three roles reference it (see AgentRoles).
+    """One agent configuration — a ``[agents.<role>]`` table in the toml.
 
-    ``system_prompt`` is optional: when omitted from the config, ``Config`` fills
-    in the role default from ``strategies.prompt`` (see ``Config`` validator).
+    ``system_prompt`` is optional: when omitted from the config, the strategy
+    fills in its role default at access time (see ``Strategy._role_agent``); one
+    set here is an override, used verbatim.
     """
 
-    harness: str  # e.g. "claude_code", "api"
+    harness: str  # e.g. "claude" (alias: "claude code"); resolved by harnesses.get_harness
     model: str
-    system_prompt: str | None = None  # None -> role default from strategies.prompt
+    system_prompt: str | None = None  # None -> the strategy's role default
     params: dict = Field(default_factory=dict)  # temperature, max tokens, etc.
 
     @model_validator(mode="before")
@@ -231,6 +230,20 @@ class Budget(BaseModel):
 # --------------------------------------------------------------------------- #
 
 
+# The strategy a config gets when it names none. ``hillclimber init`` scaffolds
+# its agent tables from this same name, so the two can't drift.
+DEFAULT_STRATEGY = "chain"
+
+# Pre-``[agents.<role>]`` table names -> the role that replaced each. Pydantic
+# ignores unknown top-level keys, so without an explicit check a legacy config
+# would load "cleanly" with no agents and fail later with a misleading error.
+_LEGACY_AGENT_TABLES = {
+    "hillclimber_agent": "orchestrator",
+    "worker_agent": "worker",
+    "reflector_agent": "reflector",
+}
+
+
 class Config(BaseModel):
     """The config. Describes what to do. Maps to ``hillclimber.toml``."""
 
@@ -249,31 +262,25 @@ class Config(BaseModel):
     # The OS sandbox that confines every agent CLI to its run's worktree. A
     # ``hillclimber.toml`` with no ``[sandbox]`` table gets the Seatbelt default.
     sandbox: SandboxConfig = Field(default_factory=SeatbeltSandboxConfig)
-    strategy: Literal["chain"] = "chain"  # valid strategies; v1: "chain" only
+    # Which strategy runs the climb; resolved and validated by strategies.registry.
+    strategy: str = DEFAULT_STRATEGY
     goal: Goal = Field(default_factory=Goal)  # what the climb optimizes toward
     budget: Budget  # hard stop condition (v1: cycles only)
-    hillclimber_agent: Agent
-    worker_agent: Agent
-    reflector_agent: Agent
+    # One ``[agents.<role>]`` table per role. Which roles are required is the
+    # strategy's declaration, checked by ``strategies.registry.verify_agents``.
+    agents: dict[str, Agent] = Field(default_factory=dict)
 
-    @model_validator(mode="after")
-    def _fill_role_prompts(self) -> Config:
-        """Default each role's ``system_prompt`` from ``strategies.prompt``.
-
-        Prompts are optional in the config (see ``Agent``): a role left without a
-        ``system_prompt`` inherits the role default, while one set in the toml is
-        left untouched as an override.
-        """
-        defaults = {
-            "hillclimber_agent": prompt.HILLCLIMBER_AGENT,
-            "worker_agent": prompt.WORKER_AGENT,
-            "reflector_agent": prompt.REFLECTOR_AGENT,
-        }
-        for role, default in defaults.items():
-            agent = getattr(self, role)
-            if agent.system_prompt is None:
-                agent.system_prompt = default
-        return self
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_legacy_agent_tables(cls, data: object) -> object:
+        """Fail a pre-rename config with a hint instead of silently dropping its agents."""
+        if isinstance(data, dict):
+            renames = ", ".join(
+                f"[{table}] -> [agents.{role}]" for table, role in _LEGACY_AGENT_TABLES.items() if table in data
+            )
+            if renames:
+                raise ValueError(f"agent tables were renamed; move {renames} in hillclimber.toml")
+        return data
 
     @model_validator(mode="after")
     def _reject_absolute_scorer_path(self) -> Config:

@@ -33,5 +33,7 @@ _WIDE_COLUMNS = 88
 def print_banner(console: Console) -> None:
     """Print the wordmark sized to the terminal, followed by a blank line."""
     banner = BANNER_WIDE if console.width > _WIDE_COLUMNS else BANNER_NARROW
-    console.print(banner, style="bold green", highlight=False)
+    # "bold default" uses the terminal's own foreground colour, so the wordmark
+    # renders black on light themes and white on dark themes.
+    console.print(banner, style="bold default", highlight=False)
     console.print()

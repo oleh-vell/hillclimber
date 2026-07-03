@@ -56,9 +56,7 @@ def _config() -> Config:
             "path_to_artefact": ".",
             "scorer": {"kind": "command", "cmd": "true"},
             "budget": {"cycles": 1},
-            "hillclimber_agent": agent,
-            "worker_agent": agent,
-            "reflector_agent": agent,
+            "agents": {"orchestrator": agent, "worker": agent},
         }
     )
 
@@ -92,7 +90,8 @@ def test_propose_hypothesis_runs_the_agent_through_the_harness():
     call = fake.calls[0]
     assert call.path == "hc_a1b2_cycle_001"
     assert call.model == "claude-opus-4-8"
-    assert call.system_prompt  # the role default, filled in by Config
+    # The toml set no prompt, so the strategy's role default reaches the harness.
+    assert call.system_prompt == Chain.roles["orchestrator"].default_prompt
 
 
 def test_propose_hypothesis_feeds_past_attempts_into_the_prompt():
@@ -142,7 +141,7 @@ def test_apply_hypothesis_runs_the_worker_and_asks_for_a_commit():
     call = fake.calls[0]
     assert call.path == "hc_a1b2_cycle_001"
     assert call.model == "claude-opus-4-8"
-    assert call.system_prompt  # the worker role default, filled in by Config
+    assert call.system_prompt == Chain.roles["worker"].default_prompt
     assert cycle.hypothesis in call.prompt
     assert "commit" in call.prompt.lower()
 
@@ -163,7 +162,7 @@ def test_propose_hypothesis_forwards_labelled_traces_to_the_sink():
     assert len(events) == 1
     assert events[0].kind == "tool_use"
     assert events[0].summary == "Read(pipeline.py)"
-    assert events[0].label == "cycle 003/hillclimber"
+    assert events[0].label == "cycle 003/orchestrator"
 
 
 def test_apply_hypothesis_forwards_labelled_traces_to_the_sink():
@@ -184,7 +183,7 @@ def test_default_trace_sink_logs_events(caplog):
         asyncio.run(chain._propose_hypothesis(_config(), "hc_a1b2_cycle_001", index=1))
 
     # With no sink injected, traces surface as ordinary log lines.
-    assert any("cycle 001/hillclimber" in message and "Read(pipeline.py)" in message for message in caplog.messages)
+    assert any("cycle 001/orchestrator" in message and "Read(pipeline.py)" in message for message in caplog.messages)
 
 
 # --------------------------------------------------------------------------- #
