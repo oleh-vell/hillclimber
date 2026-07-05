@@ -97,7 +97,10 @@ async def run(
     # (scored on the working tree) and the cycles (forked from HEAD) measure
     # different code. Refuse to start rather than silently diverge; with
     # ``auto_commit`` set, snapshot the dirty tree into a commit and climb from that.
-    if await check_uncommitted_changes(config.path_to_artefact):
+    # An explicit ``start_branch`` skips all of this: the baseline is scored in a
+    # throwaway checkout of that ref and cycle 1 forks from it, so the working
+    # tree's state is irrelevant — and must not be snapshotted over the user's ref.
+    if not config.start_branch and await check_uncommitted_changes(config.path_to_artefact):
         if config.auto_commit:
             # Capture the dirty tree as a non-destructive commit and climb from
             # it: routing the snapshot sha through ``start_branch`` makes both the

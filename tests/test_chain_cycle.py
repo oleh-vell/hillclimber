@@ -308,6 +308,38 @@ def test_execute_chains_each_cycle_off_the_previous_branch(tmp_path: Path):
     assert parents == ["baseline", "hc/x_cycle_001", "hc/x_cycle_002"]
 
 
+def test_execute_does_not_chain_onto_a_failed_cycle(tmp_path: Path):
+    parent_scores: list[float] = []
+
+    class _BrokenSecond(_StubChain):
+        """Cycle 2's hypothesis breaks the eval: 0.0, ``passed`` false, failed."""
+
+        async def one_cycle(
+            self,
+            config: Config,
+            experiment_id: str,
+            index: int,
+            parent_ref: str,
+            parent_score: Score,
+        ) -> Cycle:
+            parent_scores.append(parent_score.value)
+            cycle = await super().one_cycle(config, experiment_id, index, parent_ref, parent_score)
+            if index == 2:
+                cycle.score_after = Score(value=0.0, passed=False, scorer_id="command")
+                cycle.status = CycleStatus.failed
+            return cycle
+
+    chain = _BrokenSecond([0.6, 0.0, 0.7])
+    asyncio.run(chain.execute(_exec_config(cycles=3, path=str(tmp_path)), _baseline()))
+
+    parents = [parent for _, _, parent in chain.cycles_run]
+    # Cycle 3 forks from cycle 1's branch, not the broken cycle 2's — otherwise
+    # merely un-breaking the eval would read as a huge win over its 0.0.
+    assert parents == ["baseline", "hc/x_cycle_001", "hc/x_cycle_001"]
+    # And the score to beat stays cycle 1's, not the failed cycle's 0.0.
+    assert parent_scores == [0.5, 0.6, 0.6]
+
+
 def test_execute_mints_one_experiment_id_and_numbers_cycles(tmp_path: Path):
     chain = _StubChain([0.6, 0.7])
     asyncio.run(chain.execute(_exec_config(cycles=2, path=str(tmp_path)), _baseline()))

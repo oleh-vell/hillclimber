@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import sys
 from pathlib import Path
 from typing import Annotated
 
@@ -36,7 +35,7 @@ from rich.markup import escape
 from harnesses import HarnessError, TraceEvent, TraceSink
 from hillclimber.cli import render
 from hillclimber.cli.banner import run_phrase
-from hillclimber.cli.console import console, err_console
+from hillclimber.cli.console import can_prompt, console, err_console
 from hillclimber.cli.live import RunDashboard
 from hillclimber.cli.state import CLIState
 from hillclimber.cli.tracelog import TraceLog, trace_path
@@ -73,16 +72,6 @@ def _detect_history(config: Config | None) -> tuple[str, Path] | None:
     return None
 
 
-def _can_prompt(state: CLIState) -> bool:
-    """Whether the overwrite question can actually be asked.
-
-    Needs a real interactive session: a terminal on both ends and no ``--json``
-    (whose stdout must stay machine-clean). Everything else — CI, piped output —
-    fails with a hint instead of hanging on a prompt nobody will answer.
-    """
-    return not state.json and console.is_terminal and sys.stdin.isatty()
-
-
 def _reset(artefact: str) -> None:
     """Drive ``reset_history`` from the sync shell, rendering its failures cleanly."""
     try:
@@ -111,7 +100,7 @@ def _settle_history(state: CLIState, config: Config | None, overwrite: bool, app
     artefact, lock = detected
     if overwrite:
         _reset(artefact)
-    elif _can_prompt(state):
+    elif can_prompt(state):
         if typer.confirm("past experiment detected — overwrite its history?", default=True):
             _reset(artefact)
         else:

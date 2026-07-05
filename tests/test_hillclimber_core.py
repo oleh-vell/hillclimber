@@ -163,6 +163,31 @@ def test_run_snapshots_a_dirty_artefact_when_auto_commit_set(tmp_path: Path, mon
     assert (tmp_path / "a.txt").read_text() == "changed\n"
 
 
+def test_run_keeps_an_explicit_start_branch_on_a_dirty_tree(tmp_path: Path, monkeypatch):
+    # With start_branch set, the baseline is scored in a throwaway checkout of
+    # that ref and cycle 1 forks from it — the dirty working tree is irrelevant.
+    # auto_commit must not overwrite the user's ref with a dirty-tree snapshot.
+    _git("init", "-b", "main", cwd=tmp_path)
+    toml = _PROGRESS_TOML.replace("[scorer]", 'auto_commit = true\nstart_branch = "main"\n[scorer]', 1)
+    toml = toml.replace('echo \'{\\"hillclimber_eval\\": 1, \\"score\\": 0.42}\'', "cat score.json")
+    (tmp_path / "hillclimber.toml").write_text(toml)
+    (tmp_path / "score.json").write_text('{"hillclimber_eval": 1, "score": 0.7}\n')
+    _git("add", "-A", cwd=tmp_path)
+    _git("commit", "-m", "main", cwd=tmp_path)
+    (tmp_path / "score.json").write_text('{"hillclimber_eval": 1, "score": 0.1}\n')  # dirty working tree
+
+    async def _verified(self: ClaudeHarness, model: str) -> None:
+        return None
+
+    monkeypatch.setattr(ClaudeHarness, "verify_model", _verified)
+
+    status = asyncio.run(hillclimber.run(tmp_path))
+
+    # Scored at the configured ref (main -> 0.7), not a snapshot of the dirty
+    # tree (0.1) — the ref the user asked for was honoured.
+    assert status.baseline_score.value == pytest.approx(0.7)
+
+
 # --------------------------------------------------------------------------- #
 # run: progress events
 # --------------------------------------------------------------------------- #

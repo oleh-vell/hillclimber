@@ -73,6 +73,19 @@ def test_check_fails_when_the_scorer_command_fails(tmp_path: Path):
     assert "exited 1" in payload["error"]
 
 
+def test_check_applies_the_configured_scorer_timeout(tmp_path: Path):
+    # The check runs the scorer under the same wall-clock ceiling the climb
+    # would, so an eval that hangs fails fast instead of wedging the command.
+    (tmp_path / "hillclimber.toml").write_text(_TOML.format(cmd="sleep 30") + "[timeout]\nscorer_seconds = 0.2\n")
+
+    result = runner.invoke(app, ["--json", "check", str(tmp_path)])
+
+    assert result.exit_code == 1
+    payload = json.loads(result.output)
+    assert payload["ok"] is False
+    assert "timeout" in payload["error"]
+
+
 def test_check_fails_when_no_envelope_is_printed(tmp_path: Path):
     _project(tmp_path, "echo hello")
 

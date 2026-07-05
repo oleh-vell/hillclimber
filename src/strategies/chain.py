@@ -335,10 +335,14 @@ class Chain(Strategy):
                     if after.value > peak_score.value:
                         peak_score = after
 
-                # Chain: the next cycle forks from this cycle's branch and aims to beat
-                # its score (carried forward even when it dipped below the parent).
-                parent_ref = cycle.branch
-                if after is not None:
+                # Chain: the next cycle forks from this cycle's branch and aims to
+                # beat its score (carried forward even when it dipped below the
+                # parent). A *failed* cycle is different: its 0.0 means "the eval
+                # could not report", not a measurement — chaining onto that branch
+                # would let any change that merely un-breaks the eval read as a
+                # huge win, so the chain keeps the last good parent instead.
+                if after is not None and after.passed:
+                    parent_ref = cycle.branch
                     parent_score = after
         except BaseException:
             # Best-effort terminal record — a secondary write failure must not

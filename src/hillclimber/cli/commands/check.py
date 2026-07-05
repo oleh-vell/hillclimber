@@ -26,7 +26,7 @@ from rich.markup import escape
 from hillclimber.cli.console import console, err_console
 from hillclimber.cli.state import CLIState
 from hillclimber.config import load_config
-from hillclimber.scoring import parse_eval, run_scorer_command
+from hillclimber.scoring import ScorerError, parse_eval, run_scorer_command
 from strategies.registry import get_strategy, verify_agents
 
 # How much of the scorer's output to show when diagnosing a failure — enough to
@@ -105,9 +105,15 @@ def check(
         roles = ", ".join(get_strategy(config.strategy).roles)
         console.print(f'[green]✓[/] agents cover strategy "{config.strategy}" ({roles})')
 
-    # 3. The command runs — in the artefact dir, exactly as the baseline would.
+    # 3. The command runs — in the artefact dir, exactly as the baseline would:
+    #    same subprocess chokepoint, same wall-clock ceiling.
     started = time.perf_counter()
-    returncode, stdout, stderr = asyncio.run(run_scorer_command(config.scorer, config.path_to_artefact))
+    try:
+        returncode, stdout, stderr = asyncio.run(
+            run_scorer_command(config.scorer, config.path_to_artefact, timeout=config.timeout.scorer_seconds)
+        )
+    except ScorerError as exc:
+        _fail(state, str(exc), warnings=agent_warnings)
     elapsed = time.perf_counter() - started
     if returncode != 0:
         _tail(state, stderr, "stderr")

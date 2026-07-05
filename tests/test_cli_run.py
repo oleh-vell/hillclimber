@@ -172,7 +172,7 @@ def test_run_overwrite_and_append_are_mutually_exclusive(tmp_path):
 def test_run_prompt_default_yes_overwrites(monkeypatch, tmp_path):
     _stub_run(monkeypatch, _status())
     lock = _experiment_with_history(tmp_path)
-    monkeypatch.setattr(run_cmd, "_can_prompt", lambda state: True)
+    monkeypatch.setattr(run_cmd, "can_prompt", lambda state: True)
 
     # Bare Enter takes the default: Y -> overwrite, then the run proceeds.
     result = runner.invoke(app, ["run", str(tmp_path)], input="\n")
@@ -185,7 +185,7 @@ def test_run_prompt_default_yes_overwrites(monkeypatch, tmp_path):
 def test_run_prompt_decline_aborts_and_keeps_history(monkeypatch, tmp_path):
     _stub_run(monkeypatch, _status())
     lock = _experiment_with_history(tmp_path)
-    monkeypatch.setattr(run_cmd, "_can_prompt", lambda state: True)
+    monkeypatch.setattr(run_cmd, "can_prompt", lambda state: True)
 
     result = runner.invoke(app, ["run", str(tmp_path)], input="n\n")
 

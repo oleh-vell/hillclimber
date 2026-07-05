@@ -8,6 +8,8 @@ monkeypatch it, so nothing here talks HTTP.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from typer.testing import CliRunner
 
@@ -36,11 +38,30 @@ def test_immediate_mode_sends_the_argument(sent: list[str]):
     assert "feedback sent" in result.output
 
 
-def test_interactive_mode_prompts_for_the_message(sent: list[str]):
+def test_interactive_mode_prompts_for_the_message(sent: list[str], monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(feedback_cmd, "can_prompt", lambda state: True)
     result = runner.invoke(app, ["feedback"], input="the chain strategy is great\n")
     assert result.exit_code == 0
     assert "What feedback would you like to give?" in result.output
     assert sent == ["the chain strategy is great"]
+
+
+def test_no_message_and_no_terminal_fails_instead_of_prompting(sent: list[str]):
+    # CliRunner's stdin is not a TTY, so a bare ``feedback`` must fail with the
+    # fix rather than hang on (or die inside) a prompt nobody will answer.
+    result = runner.invoke(app, ["feedback"])
+    assert result.exit_code == 1
+    assert "pass it as an argument" in result.output
+    assert sent == []
+
+
+def test_json_mode_never_prompts_for_a_missing_message(sent: list[str]):
+    # --json stdout must stay machine-clean: no prompt text, a JSON error only.
+    result = runner.invoke(app, ["--json", "feedback"])
+    assert result.exit_code == 1
+    payload = json.loads(result.output)
+    assert payload["ok"] is False
+    assert sent == []
 
 
 def test_message_is_stripped_before_sending(sent: list[str]):

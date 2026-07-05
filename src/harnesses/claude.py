@@ -393,6 +393,14 @@ class ClaudeHarness(Harness):
             stdout, stderr, returncode = await exec_agent(
                 _build_verify_command(model), workdir, self.sandbox, self.write_allow, self.timeouts.verify_seconds
             )
+        except FileNotFoundError as exc:
+            # A missing binary (the CLI itself, or the sandbox wrapper) surfaces
+            # here as HarnessError so ``verify``'s TaskGroup keeps its flat
+            # contract — otherwise it escapes as an ExceptionGroup the CLI's
+            # error rendering can't match, and the user sees a raw traceback.
+            raise HarnessError(
+                f"cannot launch the claude CLI ({exc}); is Claude Code installed and on your PATH?"
+            ) from exc
         except AgentTimeout as exc:
             raise HarnessError(
                 f"claude did not respond within {self.timeouts.verify_seconds}s verifying model {model!r}"

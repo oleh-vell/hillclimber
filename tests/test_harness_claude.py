@@ -185,6 +185,18 @@ def test_verify_model_maps_a_timeout_to_a_harness_error(monkeypatch):
         asyncio.run(harness.verify_model("opus"))
 
 
+def test_verify_model_maps_a_missing_cli_to_a_harness_error(monkeypatch):
+    # No ``claude`` on PATH surfaces as HarnessError, keeping ``verify``'s flat
+    # contract — not as a FileNotFoundError buried in an ExceptionGroup.
+    async def _missing(*args, **kwargs):
+        raise FileNotFoundError(2, "No such file or directory", "claude")
+
+    monkeypatch.setattr(claude_mod, "exec_agent", _missing)
+    harness = ClaudeHarness(PassthroughSandbox())
+    with pytest.raises(HarnessError, match="cannot launch the claude CLI"):
+        asyncio.run(harness.verify_model("opus"))
+
+
 def test_get_harness_returns_claude():
     assert isinstance(get_harness("claude", PassthroughSandbox()), ClaudeHarness)
 

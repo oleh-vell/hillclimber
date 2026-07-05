@@ -23,7 +23,7 @@ from typing import Annotated, NoReturn
 
 import typer
 
-from hillclimber.cli.console import console, err_console
+from hillclimber.cli.console import can_prompt, console, err_console
 from hillclimber.cli.state import CLIState
 
 # Placeholder — the real domain is not registered yet. Update this when the FE
@@ -98,6 +98,11 @@ def feedback(
     state: CLIState = ctx.obj
 
     if message is None:
+        # Prompting needs a real interactive session; in --json mode or piped
+        # output the prompt would pollute the machine-readable stream (or die
+        # with a raw Aborted in CI), so fail with the fix instead.
+        if not can_prompt(state):
+            _fail(state, 'no message given; pass it as an argument: hillclimber feedback "..."')
         message = typer.prompt("What feedback would you like to give?")
 
     message = message.strip()
