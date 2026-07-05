@@ -30,7 +30,6 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
-from rich.markup import escape
 
 from hillclimber.cli import render
 from hillclimber.cli.banner import run_phrase
@@ -72,13 +71,12 @@ def _detect_history(config: Config | None) -> tuple[str, Path] | None:
     return None
 
 
-def _reset(artefact: str) -> None:
+def _reset(state: CLIState, artefact: str) -> None:
     """Drive ``reset_history`` from the sync shell, rendering its failures cleanly."""
     try:
         asyncio.run(reset_history(artefact))
     except RuntimeError as exc:
-        err_console.print(f"[red]error:[/] {escape(str(exc))}")
-        raise typer.Exit(code=1) from exc
+        render.fail(state, str(exc))
 
 
 def _settle_history(state: CLIState, config: Config | None, overwrite: bool, append: bool) -> None:
@@ -99,19 +97,19 @@ def _settle_history(state: CLIState, config: Config | None, overwrite: bool, app
         return
     artefact, lock = detected
     if overwrite:
-        _reset(artefact)
+        _reset(state, artefact)
     elif can_prompt(state):
         if typer.confirm("past experiment detected — overwrite its history?", default=True):
-            _reset(artefact)
+            _reset(state, artefact)
         else:
             err_console.print("aborted — previous experiment history kept")
             raise typer.Exit(code=1)
     else:
-        err_console.print(
-            f"[red]error:[/] past experiment history exists at {lock}; "
-            "rerun with --overwrite to reset it or --append to climb on top of it"
+        render.fail(
+            state,
+            f"past experiment history exists at {lock}; "
+            "rerun with --overwrite to reset it or --append to climb on top of it",
         )
-        raise typer.Exit(code=1)
 
 
 def _tee(*sinks: TraceSink) -> TraceSink:
@@ -158,8 +156,7 @@ def _print_next_step(status: ExperimentStatus, config: Config, target_arg: str) 
         else:
             hint = ""
             if best is not None and best.delta > 0:
-                suffix = f" {target_arg}" if target_arg else ""
-                hint = f"; to keep climbing: [bold]hillclimber run{suffix} --append[/]"
+                hint = f"; to keep climbing: [bold]{render.run_command(target_arg, append=True)}[/]"
             console.print(f"[yellow]goal not met[/] — best score {peak.value:.3f} vs target {target:.3f}{hint}")
     console.print(render.next_step(status, config.path_to_artefact, target_arg))
 
@@ -234,13 +231,12 @@ def run(
     except (FileNotFoundError, ScorerError, HarnessError, RuntimeError, ValueError) as exc:
         # The core's known failure modes (missing/invalid toml, dirty artefact,
         # failing baseline scorer, unrunnable model) each raise with a message
-        # written for the user — show that, not a traceback. --verbose keeps the
-        # traceback for debugging.
+        # written for the user — show that (through the one shared failure
+        # renderer, so --json gets a machine-readable error too), not a
+        # traceback. --verbose keeps the traceback for debugging.
         if state.verbose:
             raise
-        # escape(): the message may quote literal [brackets] like toml table names.
-        err_console.print(f"[red]error:[/] {escape(str(exc))}")
-        raise typer.Exit(code=1) from exc
+        render.fail(state, str(exc))
 
     if state.json:
         console.print_json(status.model_dump_json())

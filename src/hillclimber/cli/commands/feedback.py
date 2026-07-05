@@ -19,11 +19,12 @@ import json
 import os
 import urllib.error
 import urllib.request
-from typing import Annotated, NoReturn
+from typing import Annotated
 
 import typer
 
-from hillclimber.cli.console import can_prompt, console, err_console
+from hillclimber.cli import render
+from hillclimber.cli.console import can_prompt, console
 from hillclimber.cli.state import CLIState
 
 # The live endpoint (the hillclimber.dev API route, which relays to Telegram).
@@ -78,15 +79,6 @@ async def _send_feedback(message: str) -> None:
     await asyncio.to_thread(_post)
 
 
-def _fail(state: CLIState, error: str) -> NoReturn:
-    """Report a delivery failure and exit 1."""
-    if state.json:
-        console.print_json(json.dumps({"ok": False, "error": error}))
-    else:
-        err_console.print(f"[red]✗[/] {error}")
-    raise typer.Exit(code=1)
-
-
 def feedback(
     ctx: typer.Context,
     message: Annotated[
@@ -102,19 +94,19 @@ def feedback(
         # output the prompt would pollute the machine-readable stream (or die
         # with a raw Aborted in CI), so fail with the fix instead.
         if not can_prompt(state):
-            _fail(state, 'no message given; pass it as an argument: hillclimber feedback "..."')
+            render.fail(state, 'no message given; pass it as an argument: hillclimber feedback "..."')
         message = typer.prompt("What feedback would you like to give?")
 
     message = message.strip()
     if not message:
-        _fail(state, "feedback message is empty")
+        render.fail(state, "feedback message is empty")
     if len(message) > MAX_MESSAGE_LENGTH:
-        _fail(state, f"feedback too long ({len(message)} characters, max {MAX_MESSAGE_LENGTH})")
+        render.fail(state, f"feedback too long ({len(message)} characters, max {MAX_MESSAGE_LENGTH})")
 
     try:
         asyncio.run(_send_feedback(message))
     except ValueError as exc:
-        _fail(state, f"delivery failed: {exc}")
+        render.fail(state, f"delivery failed: {exc}")
 
     if state.json:
         console.print_json(json.dumps({"ok": True}))

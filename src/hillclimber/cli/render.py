@@ -1,23 +1,76 @@
 """Rich presentation for the CLI.
 
-The single home for how the CLI *looks* — panels, tables, and the final run
-summary (the live dashboard lives in ``hillclimber.cli.live``). Keeping it here
-means the async core (``hillclimber.run``) never imports Rich and stays a pure
-library coroutine. Every function takes a plain result model and renders it;
-nothing here reaches back into the core.
+The single home for how the CLI *looks* — panels, tables, the final run
+summary, and the one failure renderer every command exits through (the live
+dashboard lives in ``hillclimber.cli.live``). Keeping it here means the async
+core (``hillclimber.run``) never imports Rich and stays a pure library
+coroutine. Every function takes a plain result model and renders it; nothing
+here reaches back into the core.
 """
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
+from typing import NoReturn
 
+import typer
 from rich.markup import escape
 from rich.table import Table
 from rich.text import Text
 
-from hillclimber.cli.console import console
+from hillclimber.cli.console import console, err_console
+from hillclimber.cli.state import CLIState
 from hillclimber.git_utils import repo_root
 from hillclimber.models import CycleSummary, ExperimentStatus
+
+
+def fail(state: CLIState, error: str, *, hint: str | None = None, warnings: list[str] | None = None) -> NoReturn:
+    """Report a command failure and exit 1 — the one error path for every command.
+
+    In ``--json`` mode the failure is one machine-readable ``{"ok": false, ...}``
+    object on stdout, whatever command it came from, so a script driving the CLI
+    parses a single shape. Otherwise the error — and the optional hint — go to
+    stderr, styled. ``warnings`` gathered before the failure ride along in the
+    JSON payload (in text mode they were already printed as they arose).
+    """
+    if state.json:
+        console.print_json(json.dumps({"ok": False, "error": error, "warnings": warnings or []}))
+    else:
+        # escape(): the message may quote literal [brackets] like toml table names.
+        err_console.print(f"[red]✗[/] {escape(error)}")
+        if hint:
+            err_console.print(f"[yellow]hint:[/] {escape(hint)}")
+    raise typer.Exit(code=1)
+
+
+def run_command(target_arg: str, *, append: bool = False) -> str:
+    """The suggested ``hillclimber run`` invocation — one spelling everywhere.
+
+    ``target_arg`` echoes the user's own path argument (empty when they ran
+    against the current directory, so the suggestion stays as short as what
+    they actually typed).
+    """
+    suffix = f" {target_arg}" if target_arg else ""
+    return f"hillclimber run{suffix}{' --append' if append else ''}"
+
+
+def cycles_table(cycles: list[CycleSummary], best_id: str | None, *, include_hypothesis: bool = False) -> Table:
+    """The cycles/scores table — one builder for the run summary and ``status``.
+
+    Scores and deltas always; the hypothesis column only where it belongs (the
+    run summary — ``status`` stays terse). The best cycle gets a star either way.
+    """
+    table = Table(show_edge=False, pad_edge=False, box=None, padding=(0, 2, 0, 0))
+    table.add_column("cycle", style="bold", no_wrap=True)
+    table.add_column("score", justify="right", no_wrap=True)
+    table.add_column("Δ base", justify="right", no_wrap=True)
+    if include_hypothesis:
+        table.add_column("hypothesis", overflow="ellipsis", no_wrap=True, ratio=1)
+    for cycle in cycles:
+        row = _cycle_row(cycle, is_best=cycle.cycle_id == best_id)
+        table.add_row(*(row if include_hypothesis else row[:3]))
+    return table
 
 
 def experiment_summary(status: ExperimentStatus) -> None:
@@ -38,17 +91,7 @@ def experiment_summary(status: ExperimentStatus) -> None:
 
     if not status.cycles:
         return
-
-    table = Table(show_edge=False, pad_edge=False, box=None, padding=(0, 2, 0, 0))
-    table.add_column("cycle", style="bold", no_wrap=True)
-    table.add_column("score", justify="right", no_wrap=True)
-    table.add_column("Δ base", justify="right", no_wrap=True)
-    table.add_column("hypothesis", overflow="ellipsis", no_wrap=True, ratio=1)
-
-    best_id = best.cycle_id if best else None
-    for cycle in status.cycles:
-        table.add_row(*_cycle_row(cycle, is_best=cycle.cycle_id == best_id))
-    console.print(table)
+    console.print(cycles_table(status.cycles, best.cycle_id if best else None, include_hypothesis=True))
 
 
 def next_step(status: ExperimentStatus, artefact: str, target_arg: str) -> str:
@@ -73,8 +116,7 @@ def next_step(status: ExperimentStatus, artefact: str, target_arg: str) -> str:
 
     # There is history but nothing beat the baseline: climb again on top of it
     # (plain ``run`` would stop at the overwrite prompt).
-    suffix = f" {target_arg}" if target_arg else ""
-    return f"No cycle beat the baseline yet — to keep climbing: [bold]hillclimber run{suffix} --append[/]"
+    return f"No cycle beat the baseline yet — to keep climbing: [bold]{run_command(target_arg, append=True)}[/]"
 
 
 def _cycle_row(cycle: CycleSummary, is_best: bool) -> tuple[Text, Text, Text, Text]:

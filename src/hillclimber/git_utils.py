@@ -84,6 +84,20 @@ def repo_root(path: str) -> Path:
     raise FileNotFoundError(f"no such file or directory: {path}")
 
 
+async def _work_tree_toplevel(repo: Path) -> Path | None:
+    """The root of the git work tree containing ``repo``, or ``None`` if outside any.
+
+    ``git rev-parse --show-toplevel`` rather than testing ``repo/.git`` directly:
+    the ``.git`` check cannot tell "not a repo" from "a subdirectory of one",
+    and that difference matters — a nested artefact must not be silently
+    ``git init``-ed inside its containing repository.
+    """
+    rc, stdout, _stderr = await _git_capture(repo, "rev-parse", "--show-toplevel")
+    if rc != 0:
+        return None
+    return Path(stdout)
+
+
 async def check_or_init_git(path: str) -> bool:
     """Ensure ``path``'s directory is a git repository with a baseline commit.
 
@@ -107,11 +121,22 @@ async def check_or_init_git(path: str) -> bool:
 
     Raises:
         FileNotFoundError: If ``path`` does not exist.
-        RuntimeError: If ``git init``, staging, or the baseline commit fails.
+        RuntimeError: If the artefact sits *inside* another git repository (a
+            monorepo subdirectory — worktrees and branches would land in the
+            containing repo, and a nested ``git init`` would corrupt the setup),
+            or if ``git init``, staging, or the baseline commit fails.
     """
     repo = repo_root(path)
 
-    if (repo / ".git").exists():
+    toplevel = await _work_tree_toplevel(repo)
+    if toplevel is not None:
+        if toplevel.resolve() != repo.resolve():
+            raise RuntimeError(
+                f"artefact {repo} sits inside the git repository at {toplevel}; "
+                "hillclimber needs the artefact to be its own repository root — "
+                "point path_to_artefact at that root, or move the artefact to a "
+                "standalone directory"
+            )
         return False
 
     rc, stderr = await _git(repo, "init")
@@ -390,7 +415,7 @@ async def check_uncommitted_changes(path: str) -> bool:
     cycles (forked from ``HEAD``) measure different code. ``hillclimber.run`` calls
     this up front and refuses to start when it returns ``True``.
 
-    A directory that is not yet a git repo counts as clean — ``check_or_init_git``
+    A directory outside any git work tree counts as clean — ``check_or_init_git``
     will initialise it and commit its current state. The climb's own
     ``.hillclimber`` working directory (leftover worktrees and lock files) is
     excluded, so a previous run never blocks the next.
@@ -399,15 +424,15 @@ async def check_uncommitted_changes(path: str) -> bool:
         path: A directory or file inside the artefact repo.
 
     Returns:
-        ``True`` if the artefact is a git repo with uncommitted changes (outside
-        ``.hillclimber``), else ``False``.
+        ``True`` if the artefact is in a git work tree with uncommitted changes
+        (outside ``.hillclimber``), else ``False``.
 
     Raises:
         FileNotFoundError: If ``path`` does not exist.
         RuntimeError: If ``git status`` fails.
     """
     repo = repo_root(path)
-    if not (repo / ".git").exists():
+    if await _work_tree_toplevel(repo) is None:
         return False
     rc, stdout, stderr = await _git_capture(repo, "status", "--porcelain", "--", ".", ":(exclude).hillclimber")
     if rc != 0:

@@ -81,6 +81,30 @@ def test_raises_for_missing_path(tmp_path: Path):
         asyncio.run(git_utils.check_or_init_git(str(missing)))
 
 
+def test_rejects_an_artefact_nested_inside_another_repo(tmp_path: Path):
+    # A fresh subdirectory of an existing repo (a monorepo package, say) must
+    # not be silently git init-ed inside it — worktrees and branches would land
+    # in the containing repo. Refuse with directions instead.
+    _repo_with_one_commit(tmp_path)
+    nested = tmp_path / "pkg"
+    nested.mkdir()
+
+    with pytest.raises(RuntimeError, match="inside the git repository"):
+        asyncio.run(git_utils.check_or_init_git(str(nested)))
+    assert not (nested / ".git").exists()
+
+
+def test_accepts_an_artefact_that_is_its_own_nested_repo(tmp_path: Path):
+    # A nested directory with its *own* .git (e.g. initialised by an earlier
+    # hillclimber run) is a repo root in its own right — no guard, no re-init.
+    _repo_with_one_commit(tmp_path)
+    nested = tmp_path / "pkg"
+    nested.mkdir()
+    _repo_with_one_commit(nested)
+
+    assert asyncio.run(git_utils.check_or_init_git(str(nested))) is False
+
+
 def test_inits_in_parent_dir_when_path_is_a_file(tmp_path: Path):
     # A single-file artefact: git should be initialised in its containing dir.
     file_path = tmp_path / "artefact.py"

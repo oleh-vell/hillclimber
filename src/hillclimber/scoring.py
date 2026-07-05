@@ -19,6 +19,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import os
+import signal
 from pathlib import Path
 
 from pydantic import ValidationError
@@ -107,17 +109,20 @@ async def run_scorer_command(scorer: Scorer, cwd: str | Path, timeout: float | N
         cwd=cwd,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        start_new_session=True,  # session leader, so the kill below reaches the whole group
     )
     try:
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout)
     except TimeoutError as exc:
         raise ScorerError(f"scorer {scorer.cmd!r} exceeded the {timeout}s timeout in {cwd}") from exc
     finally:
-        # Covers the timeout and a cancelled climb: kill and reap the shell so a
-        # hung or aborted scorer never leaks its process.
+        # Covers the timeout and a cancelled climb: kill and reap the scorer so
+        # a hung or aborted eval never leaks processes. The shell is a session
+        # leader, so killing its group also takes down the command it spawned
+        # (a compound ``cd x && pytest`` would otherwise leave orphans).
         if proc.returncode is None:
-            with contextlib.suppress(ProcessLookupError):
-                proc.kill()
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                os.killpg(proc.pid, signal.SIGKILL)
             with contextlib.suppress(Exception):
                 await proc.wait()
     # ``communicate`` only returns once the process exited, so returncode is set.

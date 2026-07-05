@@ -28,12 +28,9 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
-from rich.markup import escape
-from rich.table import Table
-from rich.text import Text
 
 from hillclimber.cli import render
-from hillclimber.cli.console import console, err_console
+from hillclimber.cli.console import console
 from hillclimber.cli.state import CLIState
 from hillclimber.config import load_config
 from hillclimber.lockfile import load_statuses, lock_path
@@ -58,8 +55,7 @@ def _next_step(statuses: list[ExperimentStatus], artefact: str, target_arg: str)
     one the end of ``hillclimber run`` prints, so the two views never disagree.
     """
     if not statuses:
-        suffix = f" {target_arg}" if target_arg else ""
-        return f"To start climbing: [bold]hillclimber run{suffix}[/]"
+        return f"To start climbing: [bold]{render.run_command(target_arg)}[/]"
     return render.next_step(statuses[-1], artefact, target_arg)
 
 
@@ -89,21 +85,7 @@ def _print_summary(statuses: list[ExperimentStatus]) -> None:
     if not latest.cycles:
         return
     # Scores only — no hypotheses. Deeper cycle detail is the run view's job.
-    table = Table(show_edge=False, pad_edge=False, box=None, padding=(0, 2, 0, 0))
-    table.add_column("cycle", style="bold", no_wrap=True)
-    table.add_column("score", justify="right", no_wrap=True)
-    table.add_column("Δ base", justify="right", no_wrap=True)
-    best_id = best.cycle_id if best else None
-    for cycle in latest.cycles:
-        name = Text(cycle.cycle_id)
-        if cycle.cycle_id == best_id:
-            name.append(" ★", style="yellow")
-        if cycle.score_after is None:
-            table.add_row(name, Text("—", style="dim"), Text(""))
-            continue
-        style = "green" if cycle.delta > 0 else "red" if cycle.delta < 0 else "dim"
-        table.add_row(name, Text(f"{cycle.score_after.value:.3f}"), Text(f"{cycle.delta:+.3f}", style=style))
-    console.print(table)
+    console.print(render.cycles_table(latest.cycles, best.cycle_id if best else None))
 
 
 def status(
@@ -128,8 +110,7 @@ def status(
             console.print(f"\nTo scaffold one: [bold]hillclimber init{suffix}[/]")
         return
     except ValueError as exc:
-        err_console.print(f"[red]error:[/] config: {escape(str(exc))}")
-        raise typer.Exit(code=1) from exc
+        render.fail(state, f"config: {exc}")
 
     # The reader is resilient to a torn/corrupt lock line: it skips the bad line
     # (with a warning) and folds the records around it, so a single interrupted

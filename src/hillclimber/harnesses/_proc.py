@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
+import signal
 from collections.abc import Callable, Sequence
 
 from hillclimber.sandboxes.base import Sandbox
@@ -34,9 +35,9 @@ class AgentTimeout(RuntimeError):
     """An agent subprocess overran its wall-clock ceiling and was killed.
 
     Raised by :func:`exec_agent` / :func:`stream_exec_agent` when a child does
-    not finish within ``timeout`` seconds. The child is SIGKILL'd and reaped
-    before this propagates, so no orphan process is left behind (see the
-    ``timeout`` handling / ``Timeouts`` config).
+    not finish within ``timeout`` seconds. The child's whole process group is
+    SIGKILL'd and the child reaped before this propagates, so no orphan process
+    is left behind (see the ``timeout`` handling / ``Timeouts`` config).
     """
 
 
@@ -45,13 +46,15 @@ async def _terminate(proc: asyncio.subprocess.Process) -> None:
 
     The one teardown both exec paths funnel through: on a timeout, a cancelled
     climb, or an exception raised out of the stream loop, the sandboxed child
-    must not be left orphaned. ``kill`` is a no-op once the child has already
-    exited; the reap is guarded so teardown never raises over the real error.
+    must not be left orphaned. The child is spawned as a session leader
+    (``start_new_session=True``), so killing its process group takes down any
+    grandchildren it spawned too — ``proc.kill()`` alone would orphan them.
+    The reap is guarded so teardown never raises over the real error.
     """
     if proc.returncode is not None:
         return
-    with contextlib.suppress(ProcessLookupError):
-        proc.kill()
+    with contextlib.suppress(ProcessLookupError, PermissionError):
+        os.killpg(proc.pid, signal.SIGKILL)
     with contextlib.suppress(Exception):
         await proc.wait()
 
@@ -89,6 +92,7 @@ async def exec_agent(
         cwd=real_cwd,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        start_new_session=True,  # session leader, so _terminate can kill the whole group
     )
     try:
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout)
@@ -149,6 +153,7 @@ async def stream_exec_agent(
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         limit=_STREAM_LIMIT,
+        start_new_session=True,  # session leader, so _terminate can kill the whole group
     )
     # Both pipes were requested above, so the readers are always present; the
     # assert narrows the ``StreamReader | None`` types.
