@@ -277,8 +277,8 @@ export function HowItWorks() {
             </div>
             <p className="mt-7 text-[16px] leading-[1.65] text-paper/[0.6]">
               Hillclimber reads your spec and orchestrates the experiment. Each
-              cycle is an isolated git worktee, with dedicated coding agent and
-              tight feedback loop.
+              cycle is an isolated git worktree, with a dedicated coding agent
+              and a tight feedback loop.
               <br /> To start climbing execute{" "}
               <code className="rounded-[5px] border border-white/10 bg-white/[0.06] px-[6px] py-[2px] font-mono text-[13px] text-mint">
                 hillclimber run

@@ -141,13 +141,10 @@ class Harness(ABC):
     async def verify_model(self, model: str) -> None:
         """Confirm this harness can actually run ``model`` — cheaply, and for real.
 
-        The per-harness seam behind :meth:`verify`. It must make one *minimal*
-        real round-trip to the backend (enough to prove the model id is accepted
-        and the CLI is installed and authed) and must **not** ask the agent to do
-        any real work — no code generation, no tools, a one-token reply at most.
-
-        Args:
-            model: The model alias or full id to probe.
+        Backs :meth:`verify`. It must make one *minimal* real round-trip to the
+        backend (enough to prove the model id is accepted and the CLI is
+        installed and authed) and must **not** ask the agent to do any real work
+        — no code generation, no tools, a one-token reply at most.
 
         Raises:
             HarnessError: If the model can't be run by this harness.

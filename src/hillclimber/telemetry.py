@@ -55,11 +55,7 @@ _SERVICE_NAME = "hillclimber"
 
 
 def get_logger(name: str) -> logging.Logger:
-    """Return the logger for ``name`` (call as ``get_logger(__name__)``).
-
-    A thin wrapper over :func:`logging.getLogger` so modules have one import for
-    logging and the naming convention stays in one place.
-    """
+    """Return the logger for ``name`` (call as ``get_logger(__name__)``)."""
     return logging.getLogger(name)
 
 

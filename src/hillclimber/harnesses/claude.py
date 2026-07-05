@@ -1,10 +1,9 @@
 """The Claude Code harness.
 
 Drives the ``claude`` CLI in headless (``--print``) mode: it runs an agent
-against a checkout and hands back the agent's final assistant message. This is
-the concrete fill for the harness seam in ``hillclimber.strategies.chain`` (``_propose_``/
-``_apply_hypothesis``), which needs to turn a system prompt + a task into an
-agent's reply.
+against a checkout and hands back the agent's final assistant message — how
+``hillclimber.strategies.chain`` (``_propose_``/``_apply_hypothesis``) turns a
+system prompt + a task into an agent's reply.
 
 Runs use ``--output-format stream-json``, so the CLI narrates itself as NDJSON
 events while the agent works. Each line is normalized into the shared

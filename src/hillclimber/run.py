@@ -1,8 +1,7 @@
 """Run-time entry points for hillclimber.
 
-The loop runner lives here (see README "Architecture seam"). Each run scores
-the artefact with the config's scorer; the baseline is scored once before any
-cycle spins up.
+The loop runner lives here. Each run scores the artefact with the config's
+scorer; the baseline is scored once before any cycle spins up.
 
 Everything here is ``async`` (see CLAUDE.md "Concurrency"): scoring shells out
 and runs may fan out, so the runner is built on asyncio from the ground up.

@@ -74,7 +74,6 @@ def check(
     state: CLIState = ctx.obj
     target = path or Path()
 
-    # 1. The config parses and the scorer command is known.
     try:
         config = load_config(target)
     except (FileNotFoundError, ValueError) as exc:
@@ -82,8 +81,8 @@ def check(
     if not state.json:
         console.print(f"[green]✓[/] config loaded (scorer: [bold]{config.scorer.cmd}[/])")
 
-    # 2. The agents cover the strategy's declared roles. A missing role is fatal
-    #    (the run couldn't start either); an unused one only warns.
+    # A missing agent role is fatal (the run couldn't start either); an unused
+    # one only warns.
     try:
         agent_warnings = verify_agents(config)
     except ValueError as exc:
@@ -94,8 +93,8 @@ def check(
         roles = ", ".join(get_strategy(config.strategy).roles)
         console.print(f'[green]✓[/] agents cover strategy "{config.strategy}" ({roles})')
 
-    # 3. The command runs — in the artefact dir, exactly as the baseline would:
-    #    same subprocess chokepoint, same wall-clock ceiling.
+    # Run the scorer in the artefact dir exactly as the baseline would: same
+    # subprocess chokepoint, same wall-clock ceiling.
     started = time.perf_counter()
     try:
         returncode, stdout, stderr = asyncio.run(
@@ -116,7 +115,6 @@ def check(
     if not state.json:
         console.print(f"[green]✓[/] scorer ran (exit 0, {elapsed:.1f}s)")
 
-    # 4. The output carries a valid envelope.
     try:
         evaluation = parse_eval(stdout)
     except ValueError as exc:

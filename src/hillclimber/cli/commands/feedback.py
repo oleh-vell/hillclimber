@@ -6,10 +6,9 @@ way the text is POSTed to the hillclimber feedback endpoint (which relays it to
 Telegram), so giving feedback costs one line in the terminal — no issue tracker,
 no login.
 
-The endpoint is baked in but overridable via ``HILLCLIMBER_FEEDBACK_URL``, which
-also gives tests a hermetic seam. The POST itself is stdlib ``urllib`` offloaded
-to a thread — one call per invocation does not justify an HTTP client dependency,
-and the async core stays untouched.
+The endpoint is baked in but overridable via ``HILLCLIMBER_FEEDBACK_URL`` (which
+is also how tests stay hermetic). The POST itself is stdlib ``urllib`` offloaded
+to a thread — one call per invocation does not justify an HTTP client dependency.
 """
 
 from __future__ import annotations

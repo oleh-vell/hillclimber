@@ -11,7 +11,6 @@ function asString(body: unknown, key: string): unknown {
 }
 
 export async function POST(request: NextRequest) {
-  // 1. Parse the JSON body.
   let body: unknown;
   try {
     body = await request.json();
@@ -19,7 +18,6 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Request body must be JSON" }, { status: 400 });
   }
 
-  // 2. Validate the feedback message (required).
   const message = asString(body, "message");
   if (typeof message !== "string" || message.trim() === "") {
     return NextResponse.json(
@@ -34,7 +32,6 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // 3. Relay to Telegram.
   const lines = ["💬 New hillclimber feedback", "", message.trim()];
   try {
     await sendMessage(lines.join("\n"));

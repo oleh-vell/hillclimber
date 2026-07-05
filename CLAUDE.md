@@ -54,7 +54,7 @@ runs, so I/O must never block the event loop.
   blocking work with `asyncio.to_thread`.
 - Run concurrent work with `asyncio.gather` / `asyncio.TaskGroup` rather than serial `await`s
   when the tasks are independent.
-- Synchronous entry points (e.g. `main.py`, scripts) drive the async core with `asyncio.run(...)`.
+- Synchronous entry points (e.g. CLI commands, scripts) drive the async core with `asyncio.run(...)`.
 - Tests call coroutines via `asyncio.run(...)` (no `pytest-asyncio` dependency).
 
 ## Layout

@@ -50,37 +50,17 @@ class Chain(Strategy):
         parent_ref: str,
         parent_score: Score,
     ) -> Cycle:
-        """Run a single climb cycle: propose -> apply -> record.
-
-        One cycle is one hypothesis iteration in its own worktree (see ``Cycle``):
-        branch off the parent, ask the orchestrator agent for a hypothesis, record
-        it in a ``.lock``, let the worker agent apply it in a fresh context,
-        commit the worker's edits (the sandboxed worker cannot run git itself),
-        then score that committed result and fold it back into the lock.
+        """Run a single climb cycle in its own worktree: propose -> apply -> score.
 
         The score is read from the cycle's own commit, not the artefact's ``HEAD``:
-        the worktree is the cycle's checkout, the worker commits its change there,
-        and the next cycle forks from *this* branch (see ``execute``) — so the climb
-        chains, each cycle building on the last.
-
-        Args:
-            config: The validated experiment config.
-            experiment_id: The owning experiment's id (``exp_...``); its 8-hex
-                body seeds this cycle's worktree/branch names.
-            index: The 1-based cycle number within the experiment.
-            parent_ref: The git ref this cycle forks from — the baseline snapshot
-                for cycle 1, the previous cycle's branch thereafter.
-            parent_score: The score to beat — the parent's score, recorded as
-                ``score_before``.
-
-        Returns:
-            The completed ``Cycle``.
+        the worker commits its change in the cycle's checkout, and the next cycle
+        forks from *this* branch (see ``execute``) — so the climb chains, each
+        cycle building on the last.
         """
-        # 1. Name and branch a fresh worktree off the parent. The worktree/branch
-        #    are scoped per (experiment, cycle): hc_<XXXXXXXX>_cycle_<NNN>, where
-        #    XXXXXXXX is the experiment's full 8-hex id and NNN the zero-padded
-        #    cycle number. The full id (not a 4-char prefix) keeps branch names
-        #    from colliding with a prior experiment's leftover hc/* branches.
+        # Worktree/branch names are scoped per (experiment, cycle):
+        # hc_<XXXXXXXX>_cycle_<NNN>, using the experiment's full 8-hex id (not a
+        # short prefix) so branch names can't collide with a prior experiment's
+        # leftover hc/* branches.
         slug = f"{experiment_id.removeprefix('exp_')}_cycle_{index:03d}"
         worktree_name = f"hc_{slug}"
         branch = f"hc/{slug}"
@@ -94,11 +74,9 @@ class Chain(Strategy):
             # actually produced a new commit.
             base_sha = await head_sha(worktree)
 
-            # 2. Ask the orchestrator agent for one hypothesis. [HARNESS SEAM]
             hypothesis = await self._propose_hypothesis(config, worktree, index)
             logger.debug("cycle %d: hypothesis: %s", index, hypothesis)
 
-            # 3. Record the running cycle in its lock: hypothesis, parent, score_before.
             cycle = Cycle(
                 experiment_id=experiment_id,
                 index=index,
@@ -111,17 +89,14 @@ class Chain(Strategy):
             )
             await self.write_lock(worktree, cycle)
 
-            # 4. Worker applies the hypothesis in a fresh context. [HARNESS SEAM]
             await self._apply_hypothesis(config, cycle, worktree)
 
-            # 5. Commit the worker's edits (the sandbox denies the worker git, so
-            #    committing is the runner's job) and record the commit the score is
-            #    read from.
+            # The sandbox denies the worker git, so committing is the runner's job.
             cycle.commit_sha = await self._commit_cycle(worktree, base_sha, index)
 
-            # 6. Score this cycle's committed result. A hypothesis that leaves the
-            #    eval unable to report (broken script, timeout) scores 0.0/passed
-            #    false rather than aborting the experiment — record it as failed.
+            # A hypothesis that leaves the eval unable to report (broken script,
+            # timeout) scores 0.0/passed false rather than aborting the experiment
+            # — record it as failed.
             self.progress_sink(
                 RunEvent(
                     kind="cycle_stage",
@@ -140,8 +115,6 @@ class Chain(Strategy):
                 parent_score.value,
             )
 
-            # 7. Remember this cycle so the next cycle's proposer can build on it,
-            #    then fold the result back into the lock and hand the cycle back.
             self._cycle_records.append(
                 CycleRecord(hypothesis=hypothesis, before=parent_score.value, after=cycle.score_after.value)
             )
@@ -153,26 +126,11 @@ class Chain(Strategy):
             await remove_worktree_if_present(config.path_to_artefact, worktree_name)
 
     async def _propose_hypothesis(self, config: Config, worktree: str, index: int) -> str:
-        """Ask the orchestrator agent for one hypothesis, via the harness.
+        """Ask the orchestrator agent for one hypothesis, returned as plain text.
 
-        Drives the ``orchestrator`` role's agent (its model and system prompt,
-        see ``_role_agent``) against
-        the artefact checkout in ``worktree`` through ``self.harness`` and returns
-        the proposed change as text. The prompt is primed with the experiment's
-        past cycles (see ``_cycle_records`` / ``_render_history``) so each
-        hypothesis builds on what earlier cycles already learned rather than
-        restating it. The agent's progress streams into the strategy's trace
-        sink, labelled with the cycle and role (see ``_make_trace_sink``). v1
-        always routes through the Claude harness (see ``Strategy.__init__``);
-        selecting the harness per ``Agent.harness`` is a later refinement.
-
-        Args:
-            config: The validated experiment config.
-            worktree: The cycle's checkout the agent inspects and reasons over.
-            index: The 1-based cycle number, stamped onto the trace label.
-
-        Returns:
-            The proposed hypothesis as plain text.
+        The prompt is primed with the experiment's past cycles (see
+        ``_render_history``) so each hypothesis builds on what earlier cycles
+        already learned rather than restating it.
         """
         agent = self._role_agent(config, "orchestrator")
         assert agent.system_prompt is not None  # resolved by _role_agent
@@ -203,30 +161,14 @@ class Chain(Strategy):
         )
 
     async def _apply_hypothesis(self, config: Config, cycle: Cycle, worktree: str) -> None:
-        """Run the worker agent to apply ``cycle.hypothesis``.
+        """Run the worker agent to apply ``cycle.hypothesis`` inside ``worktree``.
 
-        Drives the ``worker`` role's agent (its model and system prompt, see
-        ``_role_agent``) in a fresh
-        context through ``self.harness`` to apply ``cycle.hypothesis`` inside
-        ``worktree``. The worker only edits — the sandbox denies it git (the
+        The worker is handed only the hypothesis — a fresh context with no memory
+        of how it was proposed. It only edits: the sandbox denies it git (the
         worktree's metadata lives in the parent repo, outside the boundary), so
-        ``one_cycle`` commits its edits afterwards via ``_commit_cycle``, outside
-        the sandbox. The worker is handed only the
-        hypothesis as its task — a fresh context with no memory of how it was
-        proposed (the proposer/worker split). Its progress streams into the
-        strategy's trace sink, labelled with the cycle and role (see
-        ``_make_trace_sink``). v1 always routes through the Claude harness (see
-        ``Strategy.__init__``).
-
-        Scoring is *not* done here: it is read from the resulting commit by
-        ``one_cycle`` (see ``_commit_cycle`` / ``score_artefact``), so the worker
-        is never asked to run or reason about the eval — that avoids it chasing a
-        failing score in an open-ended remediation loop.
-
-        Args:
-            config: The validated experiment config.
-            cycle: The running cycle; ``cycle.hypothesis`` is the change to apply.
-            worktree: The cycle's checkout the worker edits and commits in.
+        ``one_cycle`` commits afterwards. And it is never asked to run or reason
+        about the eval — that avoids it chasing a failing score in an open-ended
+        remediation loop.
         """
         agent = self._role_agent(config, "worker")
         assert agent.system_prompt is not None  # resolved by _role_agent
@@ -258,21 +200,11 @@ class Chain(Strategy):
         )
 
     async def execute(self, config: Config, baseline: Score) -> ExperimentStatus:
-        """Drive the chained climb to completion.
+        """Drive the chained climb to completion and return the final status.
 
-        Ensures the artefact directory is a git repository first (initialising
-        it if need be) — every cycle forks its worktree from there. Then mints
-        one experiment id and runs cycles in sequence until either the goal is
-        met or the budget is exhausted — both checked up front, so a goal already
-        satisfied by the baseline (or a zero-cycle budget) runs nothing. Each
-        cycle's result is folded into the running ``best``/``cycles`` view.
-
-        Args:
-            config: The validated experiment config.
-            baseline: The baseline ``Score`` each cycle must beat.
-
-        Returns:
-            The final ``ExperimentStatus`` — every cycle attempted and the best so far.
+        Runs cycles in sequence until either the goal is met or the budget is
+        exhausted — both checked up front, so a goal already satisfied by the
+        baseline (or a zero-cycle budget) runs nothing.
         """
         # Ensure the artefact is a git repo and capture the working tree (which
         # the baseline was scored on) as the commit the first cycle forks from.
@@ -326,7 +258,7 @@ class Chain(Strategy):
                 await log.record_cycle(cycle)
                 self.progress_sink(self._cycle_done_event(cycle, config.budget.cycles))
 
-                summary = self._summarize(cycle, baseline)
+                summary = CycleSummary.from_cycle(cycle, baseline)
                 cycles.append(summary)
 
                 after = cycle.score_after
@@ -375,22 +307,11 @@ class Chain(Strategy):
     async def _prepare_repo(self, config: Config) -> str:
         """Ready the artefact repo and return the ref the first cycle forks from.
 
-        Initialises git if needed (see ``check_or_init_git``) and resolves the
-        start ref: ``config.start_branch`` when set, else the artefact's current
-        ``HEAD``. ``get_baseline_score`` scores the baseline at this same ref, so
-        cycle 1 and the baseline measure the same code. For the ``HEAD`` default,
-        ``hillclimber.run`` has already refused to start on a dirty artefact (see
-        ``check_uncommitted_changes``), so ``HEAD`` is the committed state the
-        baseline was scored on.
-
-        Factored out as a seam so the loop can be tested without touching git.
-
-        Args:
-            config: The validated experiment config; ``config.path_to_artefact``
-                locates the repo and ``config.start_branch`` names the start ref.
-
-        Returns:
-            The ref to use as the first cycle's ``parent_ref``.
+        Initialises git if needed and resolves the start ref:
+        ``config.start_branch`` when set, else the artefact's current ``HEAD``.
+        ``get_baseline_score`` scores the baseline at this same ref, so cycle 1
+        and the baseline measure the same code (for the ``HEAD`` default,
+        ``hillclimber.run`` has already refused to start on a dirty artefact).
         """
         await check_or_init_git(config.path_to_artefact)
         return config.start_branch or "HEAD"
@@ -421,12 +342,3 @@ class Chain(Strategy):
             parent_delta=after.value - cycle.score_before.value,
             hypothesis=cycle.hypothesis,
         )
-
-    @staticmethod
-    def _summarize(cycle: Cycle, baseline: Score) -> CycleSummary:
-        """Flatten a completed ``cycle`` into a display ``CycleSummary``.
-
-        A named seam over ``CycleSummary.from_cycle`` — the same flattening the
-        lock-file fold uses, so the live view and ``hillclimber status`` agree.
-        """
-        return CycleSummary.from_cycle(cycle, baseline)

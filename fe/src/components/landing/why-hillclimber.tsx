@@ -54,7 +54,7 @@ const FEATURES: Feature[] = [
   {
     icon: <SlidersIcon className="size-[22px]" />,
     title: "You're in control",
-    description: "Explicilty set up the goal, budget, and models. ",
+    description: "Explicitly set up the goal, budget, and models.",
   },
   {
     icon: <CodeIcon className="size-[22px]" />,
@@ -86,7 +86,7 @@ const FEATURES: Feature[] = [
     icon: <LinkIcon strokeWidth={1.6} className="size-[22px]" />,
     title: "Use with your harness",
     description:
-      "Let your harness to do all the work and only use hillclimber as experiment orchestrator.",
+      "Let your harness do all the work and only use hillclimber as an experiment orchestrator.",
     comingSoon: true,
   },
 ];

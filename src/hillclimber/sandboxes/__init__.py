@@ -2,8 +2,8 @@
 
 ``get_sandbox`` maps a ``SandboxConfig`` (the discriminated union in
 ``hillclimber.models``) to a concrete :class:`Sandbox`. v1 ships the macOS
-Seatbelt backend plus a passthrough (``none``) opt-out; the registry is the seam
-for adding more (bubblewrap, docker, ...) later, mirroring
+Seatbelt backend plus a passthrough (``none``) opt-out; more backends
+(bubblewrap, docker, ...) register here, mirroring
 ``hillclimber.harnesses.get_harness``.
 """
 

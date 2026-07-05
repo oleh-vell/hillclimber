@@ -2,8 +2,8 @@
 
 ``get_harness`` maps a harness name (as written in ``Agent.harness``) to a
 concrete :class:`Harness`, built with the OS :class:`~hillclimber.sandboxes.base.Sandbox`
-that confines its agent runs. v1 ships the Claude Code harness only; the registry
-is the seam for adding more (an API harness, etc.) later.
+that confines its agent runs. v1 ships the Claude Code harness only; more (an
+API harness, etc.) register here.
 """
 
 from __future__ import annotations

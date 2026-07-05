@@ -11,7 +11,7 @@ than guessing.
 
 The event *shapes* live in ``hillclimber.models`` (they are write models, like
 ``Cycle``); this module is the I/O and the fold that reassembles read models
-(``ExperimentStatus``) from the log — the seam ``hillclimber status`` builds on.
+(``ExperimentStatus``) from the log — what ``hillclimber status`` builds on.
 
 v1 runs one experiment at a time, so appends are not cross-process locked;
 each event is a single ``O_APPEND`` line write.

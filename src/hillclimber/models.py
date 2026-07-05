@@ -69,9 +69,9 @@ class CommandScorer(BaseModel):
     cmd: str  # e.g. "pytest test_eval.py"
 
 
-# The fitness function. One scorer per experiment; the ``kind`` discriminator is
-# the seam for adding kinds (e.g. a judge) later — widen to ``CommandScorer |
-# JudgeScorer`` when a second arrives.
+# The fitness function. One scorer per experiment; new kinds (e.g. a judge)
+# arrive by widening the ``kind``-discriminated union to ``CommandScorer |
+# JudgeScorer``.
 Scorer = Annotated[
     CommandScorer,
     Field(discriminator="kind"),
@@ -118,9 +118,8 @@ class PassthroughSandboxConfig(BaseModel):
     kind: Literal["none"] = "none"
 
 
-# The filesystem sandbox backend. Like ``Scorer``, the ``kind`` discriminator is
-# the seam for adding backends (bubblewrap, docker, ...) later — they slot in as
-# new variants with no caller changes.
+# The filesystem sandbox backend. Like ``Scorer``, new backends (bubblewrap,
+# docker, ...) slot in as new ``kind`` variants with no caller changes.
 SandboxConfig = Annotated[
     SeatbeltSandboxConfig | PassthroughSandboxConfig,
     Field(discriminator="kind"),
@@ -128,8 +127,7 @@ SandboxConfig = Annotated[
 
 
 class Score(BaseModel):
-    """Comparable and composable — not a bare float, so accept logic stays
-    uniform across scorer kinds."""
+    """A scorer's verdict: the climbable number plus whether the eval ran cleanly."""
 
     value: float
     passed: bool
@@ -183,16 +181,8 @@ class Goal(BaseModel):
     def is_met(self, best: Score | None) -> bool:
         """Whether ``best`` satisfies the goal — the loop's early-stop check.
 
-        v1 only maximizes toward an optional ``target``. With no target set (or
-        nothing scored yet), the goal is never met, so the climb runs until the
-        budget is exhausted. This is the early-stop seam: dormant until a
-        ``target`` is configured.
-
-        Args:
-            best: The best ``Score`` achieved so far, or ``None`` before any run.
-
-        Returns:
-            ``True`` if ``best`` reaches ``target`` (maximizing), else ``False``.
+        With no ``target`` set (or nothing scored yet) the goal is never met,
+        so the climb runs until the budget is exhausted.
         """
         if best is None or self.target is None:
             return False
@@ -223,14 +213,7 @@ class Budget(BaseModel):
     cycles: int  # number of runs to attempt
 
     def is_exhausted(self, completed: int) -> bool:
-        """Whether ``completed`` cycles have used up the budget.
-
-        Args:
-            completed: The number of cycles attempted so far.
-
-        Returns:
-            ``True`` once ``completed`` reaches the ``cycles`` budget.
-        """
+        """Whether ``completed`` cycles have used up the budget."""
         return completed >= self.cycles
 
 
@@ -326,7 +309,7 @@ class Cycle(BaseModel):
 
     experiment_id: str  # e.g. exp_a1b2c3d4, minted once per experiment
     index: int  # 1-based cycle number within the experiment
-    parent_ref: str  # baseline in v1; seam for later strategies
+    parent_ref: str  # the ref this cycle forked from
     branch: str  # the experiment branch
     worktree: str  # e.g. hc_a1b2_cycle_001/
     hypothesis: str  # what this cycle tried (e.g. "Use pydantic...")
@@ -417,7 +400,7 @@ class CycleSummary(BaseModel):
 
         ``delta`` is the cycle's improvement over the *baseline*; an unscored
         cycle (no ``score_after``) reports a zero delta. The one flattening
-        used by both the live loop (``Chain._summarize``) and the lock-file
+        used by both the live loop (``Chain.execute``) and the lock-file
         fold (``lockfile.fold_statuses``), so the two can never drift.
         """
         after = cycle.score_after
