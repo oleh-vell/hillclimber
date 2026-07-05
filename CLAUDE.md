@@ -60,5 +60,5 @@ runs, so I/O must never block the event loop.
 ## Layout
 
 - `src/hillclimber/` — library package (importable as `hillclimber`).
-- `src/strategies/`, `src/harnesses/` — pluggable strategy/harness implementations.
+- `src/hillclimber/strategies/`, `src/hillclimber/harnesses/`, `src/hillclimber/sandboxes/` — pluggable strategy/harness/sandbox implementations.
 - `tests/` — pytest suite (`pythonpath = ["src"]`, so import packages directly).

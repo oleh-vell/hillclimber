@@ -13,7 +13,7 @@ import contextlib
 
 from hillclimber.git_utils import check_or_init_git, create_worktree, head_sha, remove_worktree_if_present
 from hillclimber.harnesses.base import HarnessRun
-from hillclimber.lockfile import ExperimentLog, lock_path
+from hillclimber.lockfile import ExperimentLog, lock_path, score_value
 from hillclimber.models import Config, Cycle, CycleStatus, CycleSummary, ExperimentStatus, Score
 from hillclimber.progress import RunEvent
 from hillclimber.scoring import score_artefact
@@ -331,7 +331,7 @@ class Chain(Strategy):
 
                 after = cycle.score_after
                 if after is not None:
-                    if best is None or after.value > self._score_value(best):
+                    if best is None or after.value > score_value(best):
                         best = summary
                     if after.value > peak_score.value:
                         peak_score = after
@@ -399,7 +399,7 @@ class Chain(Strategy):
     def _cycle_done_event(cycle: Cycle, total: int) -> RunEvent:
         """Build the ``cycle_done`` progress event for a completed ``cycle``.
 
-        ``delta`` is the movement against the cycle's *parent* (``score_before``)
+        ``parent_delta`` is the movement against the cycle's *parent* (``score_before``)
         — "did this step of the chain climb" — not against the baseline, which a
         consumer can derive itself from the scores it has seen.
         """
@@ -418,7 +418,7 @@ class Chain(Strategy):
             index=cycle.index,
             total=total,
             score=after.value,
-            delta=after.value - cycle.score_before.value,
+            parent_delta=after.value - cycle.score_before.value,
             hypothesis=cycle.hypothesis,
         )
 
@@ -430,8 +430,3 @@ class Chain(Strategy):
         lock-file fold uses, so the live view and ``hillclimber status`` agree.
         """
         return CycleSummary.from_cycle(cycle, baseline)
-
-    @staticmethod
-    def _score_value(summary: CycleSummary) -> float:
-        """The summary's comparable score; an unscored cycle ranks lowest."""
-        return summary.score_after.value if summary.score_after is not None else float("-inf")

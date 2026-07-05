@@ -88,7 +88,7 @@ def _env_note(path: str) -> str:
 def _build_command(run: HarnessRun) -> list[str]:
     """Build the ``claude`` argv for ``run``.
 
-    Factored out of :func:`run` so the (pure) command construction is testable
+    Factored out of :func:`run_claude` so the (pure) command construction is testable
     without shelling out. The task ``prompt`` is passed positionally after a
     ``--`` terminator so a prompt that happens to start with ``-`` is never
     mistaken for a flag. ``stream-json`` makes the CLI emit NDJSON events as the
@@ -265,7 +265,7 @@ def _parse_trace_line(line: bytes) -> list[TraceEvent]:
     return []
 
 
-async def run(
+async def run_claude(
     harness_run: HarnessRun,
     sandbox: Sandbox,
     on_trace: TraceSink | None = None,
@@ -320,7 +320,7 @@ async def run(
         raise RuntimeError(f"claude timed out after {timeout}s in {harness_run.path}") from exc
     if returncode != 0:
         logger.error("claude exited %s in %s", returncode, harness_run.path)
-        raise RuntimeError(f"claude exited {returncode}: {stderr.decode().strip()}")
+        raise RuntimeError(f"claude exited {returncode}: {stderr.decode(errors='replace').strip()}")
     if result_payload is None:
         raise RuntimeError("claude produced no result event (output unparsable or truncated)")
     if result_payload.get("is_error"):
@@ -331,7 +331,7 @@ async def run(
 
 
 class ClaudeHarness(Harness):
-    """Object adapter over the module-level :func:`run`.
+    """Object adapter over the module-level :func:`run_claude`.
 
     Lets a strategy hold a pluggable ``self.harness`` (see ``get_harness`` and
     ``Strategy.__init__``) while the actual work stays in the module-level
@@ -350,9 +350,7 @@ class ClaudeHarness(Harness):
         self.timeouts = timeouts if timeouts is not None else Timeouts()
 
     async def run(self, harness_run: HarnessRun, on_trace: TraceSink | None = None) -> str:
-        # Bare ``run`` resolves to the module-level function above — class scope
-        # is not part of method name resolution, so this is not a self-call.
-        return await run(harness_run, self.sandbox, on_trace, self.write_allow, self.timeouts.agent_seconds)
+        return await run_claude(harness_run, self.sandbox, on_trace, self.write_allow, self.timeouts.agent_seconds)
 
     async def verify_model(self, model: str) -> None:
         """Probe the ``claude`` CLI with ``model`` and a one-token health check.
@@ -393,12 +391,14 @@ class ClaudeHarness(Harness):
             await asyncio.to_thread(shutil.rmtree, workdir, ignore_errors=True)
 
         if returncode != 0:
-            raise HarnessError(f"claude cannot run model {model!r} (exited {returncode}): {stderr.decode().strip()}")
+            raise HarnessError(
+                f"claude cannot run model {model!r} (exited {returncode}): {stderr.decode(errors='replace').strip()}"
+            )
         try:
             payload = json.loads(stdout)
         except json.JSONDecodeError as exc:
             raise HarnessError(
-                f"claude produced unparsable output verifying model {model!r}: {stdout.decode().strip()}"
+                f"claude produced unparsable output verifying model {model!r}: {stdout.decode(errors='replace').strip()}"
             ) from exc
         if payload.get("is_error"):
             raise HarnessError(f"claude cannot run model {model!r}: {payload.get('result')}")

@@ -153,6 +153,10 @@ def _print_next_step(status: ExperimentStatus, config: Config, target_arg: str) 
     if target is not None:
         if config.goal.is_met(peak):
             console.print(f"[bold green]🎯 goal met[/] — best score {peak.value:.3f} reached the target {target:.3f}")
+            if best is None or best.delta <= 0:
+                # Met at the baseline itself: there is nothing to merge, and a
+                # "keep climbing" CTA right under the verdict would contradict it.
+                return
         else:
             hint = ""
             if best is not None and best.delta > 0:

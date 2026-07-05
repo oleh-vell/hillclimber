@@ -387,11 +387,11 @@ def test_execute_emits_cycle_start_and_done_events(tmp_path: Path):
     done_1, done_2 = (e for e in events if e.kind == "cycle_done")
     # Cycle 1: 0.5 -> 0.6 against its parent (the baseline).
     assert done_1.score == pytest.approx(0.6)
-    assert done_1.delta == pytest.approx(0.1)
+    assert done_1.parent_delta == pytest.approx(0.1)
     assert done_1.hypothesis == "stub"
     # Cycle 2 chains off cycle 1, so its delta is measured against 0.6, not baseline.
     assert done_2.score == pytest.approx(0.4)
-    assert done_2.delta == pytest.approx(-0.2)
+    assert done_2.parent_delta == pytest.approx(-0.2)
 
 
 def test_execute_best_is_the_top_run_even_below_baseline(tmp_path: Path):

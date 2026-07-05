@@ -48,7 +48,7 @@ class RunEvent(BaseModel):
     total: int | None = None  # the budget's cycle count, on cycle_* events
     stage: CycleStage | None = None  # on cycle_stage events
     score: float | None = None  # on baseline_done / cycle_done
-    delta: float | None = None  # cycle_done: score movement vs. the parent cycle
+    parent_delta: float | None = None  # cycle_done: score movement vs. the parent cycle
     hypothesis: str | None = None  # on cycle_stage (applying) / cycle_done
 
 

@@ -2,6 +2,10 @@
 
 Hillclimber is a framework for long-running agentic sessions aimed at measurable, eval-driven codebase improvement.
 
+```bash
+uv tool install git+https://github.com/oleh-vell/hillclimber.git
+```
+
 Its distinct feature is that it pushes you to explicitly define an eval function and spec (success criteria, budget, models) for the experiment. This is particularly useful when you want to run long sessions yet you don't have unlimited tokens to burn and you want fine control over long-running jobs.
 
 By being open-source and harness agnostic, hillclimber allows you to swap harnesses (Claude Code, Codex, Cursor etc) and models and choose the one that most suits your needs and budget.

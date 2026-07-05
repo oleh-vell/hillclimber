@@ -115,9 +115,12 @@ async def read_events(path: Path) -> list[LockEvent]:
     except FileNotFoundError:
         return []
 
-    lines = [line for line in text.splitlines() if line.strip()]
     events: list[LockEvent] = []
-    for number, line in enumerate(lines, start=1):
+    # Enumerate the raw lines so a warning's line number matches the file even
+    # when blank lines (e.g. from torn-write healing) sit between records.
+    for number, line in enumerate(text.splitlines(), start=1):
+        if not line.strip():
+            continue
         try:
             events.append(_EVENT_ADAPTER.validate_json(line))
         except ValidationError:
@@ -161,7 +164,7 @@ def fold_statuses(events: Sequence[LockEvent]) -> dict[str, ExperimentStatus]:
             summary = CycleSummary.from_cycle(event.cycle, status.baseline_score)
             status.cycles.append(summary)
             status.completed += 1
-            if status.best is None or _score_value(summary) > _score_value(status.best):
+            if status.best is None or score_value(summary) > score_value(status.best):
                 status.best = summary
         else:
             status = statuses.get(event.experiment_id)
@@ -195,8 +198,12 @@ async def reset_history(path_to_artefact: str) -> None:
         await prune_worktrees(str(root))
 
 
-def _score_value(summary: CycleSummary) -> float:
-    """The summary's comparable score; an unscored cycle ranks lowest."""
+def score_value(summary: CycleSummary) -> float:
+    """The summary's comparable score; an unscored cycle ranks lowest.
+
+    The one best-so-far ordering, shared by the lock-file fold above and the
+    live loop (``Chain.execute``) so the two can never rank cycles differently.
+    """
     return summary.score_after.value if summary.score_after is not None else float("-inf")
 
 

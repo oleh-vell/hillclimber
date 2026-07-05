@@ -249,7 +249,7 @@ class RunDashboard:
             text.append(event.message, style="dim")
             self.note(text)
             return
-        delta = event.delta or 0.0
+        delta = event.parent_delta or 0.0
         glyph, style = ("▲", "green") if delta > 0 else ("▼", "red") if delta < 0 else ("•", "dim")
         text = Text(f"{glyph} ", style=style)
         text.append(f"cycle {event.index:03d} scored " if event.index is not None else "scored ")

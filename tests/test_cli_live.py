@@ -76,8 +76,12 @@ def test_baseline_done_sets_the_score_and_prints_a_milestone():
 def test_cycle_done_tracks_the_best_score_as_the_peak():
     dashboard = RunDashboard(_console()[0])
 
-    dashboard.on_progress(RunEvent(kind="cycle_done", message="cycle 1", index=1, total=3, score=0.5, delta=0.05))
-    dashboard.on_progress(RunEvent(kind="cycle_done", message="cycle 2", index=2, total=3, score=0.4, delta=-0.1))
+    dashboard.on_progress(
+        RunEvent(kind="cycle_done", message="cycle 1", index=1, total=3, score=0.5, parent_delta=0.05)
+    )
+    dashboard.on_progress(
+        RunEvent(kind="cycle_done", message="cycle 2", index=2, total=3, score=0.4, parent_delta=-0.1)
+    )
 
     # Best keeps the peak even after a cycle that dipped.
     assert dashboard._best == 0.5

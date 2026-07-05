@@ -11,7 +11,7 @@ import hillclimber.harnesses.claude as claude_mod
 from hillclimber.harnesses import ClaudeHarness, Harness, HarnessRun, TraceEvent, get_harness
 from hillclimber.harnesses._proc import AgentTimeout, exec_agent
 from hillclimber.harnesses.base import HarnessError
-from hillclimber.harnesses.claude import _build_command, _build_verify_command, _parse_trace_line, run
+from hillclimber.harnesses.claude import _build_command, _build_verify_command, _parse_trace_line, run_claude
 from hillclimber.models import Agent
 from hillclimber.sandboxes import PassthroughSandbox
 
@@ -103,20 +103,20 @@ _RESULT_LINE = b'{"type": "result", "is_error": false, "result": "pong"}'
 
 def test_run_returns_assistant_result(monkeypatch):
     _patch_stream_proc(monkeypatch, [_RESULT_LINE])
-    out = asyncio.run(run(HarnessRun(system_prompt="sp", path=".", prompt="ping"), PassthroughSandbox()))
+    out = asyncio.run(run_claude(HarnessRun(system_prompt="sp", path=".", prompt="ping"), PassthroughSandbox()))
     assert out == "pong"
 
 
 def test_run_raises_on_nonzero_exit(monkeypatch):
     _patch_stream_proc(monkeypatch, [], returncode=1, stderr=b"boom")
     with pytest.raises(RuntimeError, match="boom"):
-        asyncio.run(run(HarnessRun(system_prompt="sp", path=".", prompt="ping"), PassthroughSandbox()))
+        asyncio.run(run_claude(HarnessRun(system_prompt="sp", path=".", prompt="ping"), PassthroughSandbox()))
 
 
 def test_run_raises_on_error_envelope(monkeypatch):
     _patch_stream_proc(monkeypatch, [b'{"type": "result", "is_error": true, "result": "nope"}'])
     with pytest.raises(RuntimeError, match="nope"):
-        asyncio.run(run(HarnessRun(system_prompt="sp", path=".", prompt="ping"), PassthroughSandbox()))
+        asyncio.run(run_claude(HarnessRun(system_prompt="sp", path=".", prompt="ping"), PassthroughSandbox()))
 
 
 def test_run_raises_when_stream_has_no_result_event(monkeypatch):
@@ -124,7 +124,7 @@ def test_run_raises_when_stream_has_no_result_event(monkeypatch):
     # ends without a terminal result event has no reply to hand back.
     _patch_stream_proc(monkeypatch, [b"not json", b'{"type": "assistant"}'])
     with pytest.raises(RuntimeError, match="no result event"):
-        asyncio.run(run(HarnessRun(system_prompt="sp", path=".", prompt="ping"), PassthroughSandbox()))
+        asyncio.run(run_claude(HarnessRun(system_prompt="sp", path=".", prompt="ping"), PassthroughSandbox()))
 
 
 def test_run_streams_trace_events_in_order_and_returns_result(monkeypatch):
@@ -143,7 +143,9 @@ def test_run_streams_trace_events_in_order_and_returns_result(monkeypatch):
     events: list[TraceEvent] = []
 
     out = asyncio.run(
-        run(HarnessRun(system_prompt="sp", path=".", prompt="ping"), PassthroughSandbox(), on_trace=events.append)
+        run_claude(
+            HarnessRun(system_prompt="sp", path=".", prompt="ping"), PassthroughSandbox(), on_trace=events.append
+        )
     )
 
     assert out == "pong"
@@ -171,7 +173,7 @@ def test_run_maps_a_stream_timeout_to_a_runtime_error(monkeypatch):
 
     monkeypatch.setattr(claude_mod, "stream_exec_agent", _timeout)
     with pytest.raises(RuntimeError, match="timed out"):
-        asyncio.run(run(HarnessRun(system_prompt="sp", path=".", prompt="p"), PassthroughSandbox()))
+        asyncio.run(run_claude(HarnessRun(system_prompt="sp", path=".", prompt="p"), PassthroughSandbox()))
 
 
 def test_verify_model_maps_a_timeout_to_a_harness_error(monkeypatch):

@@ -117,10 +117,10 @@ class TraceLog:
             try:
                 item = self._queue.get(timeout=_FLUSH_INTERVAL)
             except queue.Empty:
-                self._file.flush()  # idle: make sure a tailer sees the latest
+                self._flush()  # idle: make sure a tailer sees the latest
                 continue
             if item is _STOP:
-                self._file.flush()
+                self._flush()
                 return
             assert isinstance(item, str)  # the only non-_STOP items queued are lines
             try:
@@ -129,3 +129,12 @@ class TraceLog:
                     self._file.flush()  # caught up: surface the batch promptly
             except OSError:
                 logger.exception("failed writing to trace log %s", self.path)
+
+    def _flush(self) -> None:
+        """Flush without letting a disk error (ENOSPC, a yanked volume) kill the
+        writer thread — the trace file is a convenience, never worth the run."""
+        assert self._file is not None
+        try:
+            self._file.flush()
+        except OSError:
+            logger.exception("failed flushing trace log %s", self.path)
