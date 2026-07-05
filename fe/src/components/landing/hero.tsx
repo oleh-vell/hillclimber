@@ -10,12 +10,12 @@ export function Hero() {
       <div className="mb-[30px] flex items-center gap-[14px]">
         <span className="h-px w-10 bg-white/[0.16]" />
         <span className="font-mono text-[12px] font-semibold uppercase leading-none tracking-[0.24em] text-mint">
-          V0.1.0 (pre-release)
+          V0.0.1 (pre-release)
         </span>
         <span className="h-px w-10 bg-white/[0.16]" />
       </div>
 
-      <h1 className="m-0 whitespace-nowrap text-center font-display text-[clamp(58px,13vw,168px)] font-bold leading-[0.92] tracking-[0.01em] text-paper">
+      <h1 className="m-0 whitespace-nowrap text-center font-display text-[clamp(38px,12.3vw,168px)] font-bold leading-[0.92] tracking-[0.01em] text-paper md:text-[clamp(58px,13vw,168px)]">
         HILLCLI
         <span className="relative inline-block">
           M

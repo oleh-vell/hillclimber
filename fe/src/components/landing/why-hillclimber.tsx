@@ -113,7 +113,7 @@ function FeatureRow({ icon, title, description, comingSoon }: Feature) {
       </span>
       {comingSoon ? (
         <div className="flex flex-wrap items-start gap-[14px]">
-          <div className="min-w-[280px] flex-1">
+          <div className="min-w-[180px] flex-1">
             <h3 className="mb-[6px] text-[21px] font-semibold tracking-[-0.01em] text-paper/[0.8]">
               {title}
             </h3>

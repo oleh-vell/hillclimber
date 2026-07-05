@@ -101,6 +101,14 @@ function SpecToml() {
       <Eq />
       <Str>&quot;python eval.py&quot;</Str>
       {"\n\n"}
+      <Comment># kind = &quot;none&quot; to switch the sandbox off.</Comment>
+      {"\n"}
+      <Table>[sandbox]</Table>
+      {"\n"}
+      <K>kind</K>
+      <Eq />
+      <Str>&quot;seatbelt&quot;</Str>
+      {"\n\n"}
       <Comment>
         # Proposes the next hypothesis for improving the artefact.
       </Comment>
@@ -250,7 +258,6 @@ export function HowItWorks() {
               <code className="rounded-[5px] border border-white/10 bg-white/[0.06] px-[6px] py-[2px] font-mono text-[13px] text-mint">
                 hillclimber init
               </code>
-              .
             </p>
           </div>
 
@@ -269,7 +276,7 @@ export function HowItWorks() {
               <RunTui />
             </div>
             <p className="mt-7 text-[16px] leading-[1.65] text-paper/[0.6]">
-              hillclimber reads your spec and orchestrates the experiment. Each
+              Hillclimber reads your spec and orchestrates the experiment. Each
               cycle is an isolated git worktee, with dedicated coding agent and
               tight feedback loop.
               <br /> To start climbing execute{" "}
