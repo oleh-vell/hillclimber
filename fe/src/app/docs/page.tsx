@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { CopyButton } from "@/components/landing/copy-button";
+import { DocsNav } from "@/components/landing/docs-nav";
 import { SiteFooter } from "@/components/landing/site-footer";
 import { SiteHeader } from "@/components/landing/site-header";
 import { AUTHOR_URL } from "@/lib/site";
@@ -43,20 +44,7 @@ export default function DocsPage() {
           <p className="mb-4 mt-0 font-mono text-[11px] font-semibold uppercase tracking-[0.18em] text-mint">
             Docs
           </p>
-          <nav
-            className="flex gap-2 overflow-x-auto border-b border-white/[0.08] pb-4 md:flex-col md:overflow-visible md:border-b-0 md:border-r md:pb-0 md:pr-6"
-            aria-label="Documentation sections"
-          >
-            {navItems.map((item) => (
-              <a
-                key={item.href}
-                href={item.href}
-                className="whitespace-nowrap rounded-md px-3 py-2 font-mono text-[13px] font-medium text-paper/[0.58] no-underline transition-colors hover:bg-white/[0.05] hover:text-paper"
-              >
-                {item.label}
-              </a>
-            ))}
-          </nav>
+          <DocsNav items={navItems} />
         </aside>
 
         <article className="min-w-0">
