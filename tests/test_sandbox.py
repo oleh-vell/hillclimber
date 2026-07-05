@@ -34,7 +34,7 @@ from hillclimber.models import (
     SeatbeltSandboxConfig,
 )
 from sandboxes import PassthroughSandbox, SeatbeltSandbox, get_sandbox
-from sandboxes.seatbelt import _render_profile
+from sandboxes.seatbelt import _render_profile, _sb_quote
 from strategies.base import Strategy
 
 # --------------------------------------------------------------------------- #
@@ -263,6 +263,28 @@ def test_tmp_is_realpathed_on_macos():
     profile = _render_profile("/tmp/wt", ["/tmp/secret"], network=True)
     assert "/private/tmp/wt" in profile
     assert "/private/tmp/secret" in profile
+
+
+def test_sb_quote_escapes_quotes_and_backslashes():
+    assert _sb_quote('a"b') == 'a\\"b'
+    assert _sb_quote("a\\b") == "a\\\\b"
+    # Backslash is escaped first, so a backslash-then-quote can't collapse into a
+    # single escaped quote that would still close the literal early.
+    assert _sb_quote('a\\"b') == 'a\\\\\\"b'
+
+
+def test_render_profile_escapes_paths_with_quotes(tmp_path):
+    # A worktree path containing a double quote must not break out of the quoted
+    # string literal in the profile (compile error or, worse, injected rules).
+    workdir = tmp_path / 'w"x'
+    workdir.mkdir()
+    real = os.path.realpath(str(workdir))
+
+    profile = _render_profile(str(workdir), [], network=True)
+
+    # The path is embedded escaped, and the raw closing quote never appears bare.
+    assert f'(subpath "{_sb_quote(real)}")' in profile
+    assert '\\"x' in profile
 
 
 # --------------------------------------------------------------------------- #

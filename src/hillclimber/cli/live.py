@@ -38,9 +38,9 @@ from harnesses import TraceEvent
 from hillclimber.progress import RunEvent
 from hillclimber.telemetry import PACKAGE_LOGGERS
 
-# How many trace lines the tail keeps. Ten is enough to see what the agent is
+# How many trace lines the tail keeps. Four is enough to see what the agent is
 # doing right now without turning the region into a wall of text.
-_TRACE_TAIL = 10
+_TRACE_TAIL = 4
 
 # Tail line style per trace kind: tool calls pop slightly (they are the "agent
 # is acting" signal); everything else stays uniformly dim.
@@ -119,7 +119,13 @@ class RunDashboard:
     def __enter__(self) -> RunDashboard:
         self._started = time.monotonic()
         self._take_over_logging()
-        self._live.start()
+        try:
+            self._live.start()
+        except BaseException:
+            # A failure starting the live region must not leave the project's
+            # loggers redirected for the rest of the process.
+            self._restore_logging()
+            raise
         return self
 
     def __exit__(
@@ -129,25 +135,43 @@ class RunDashboard:
         tb: TracebackType | None,
     ) -> None:
         # Stop the live region first (transient: it clears itself), then give
-        # the loggers back so post-run output flows normally again.
-        self._live.stop()
-        self._restore_logging()
+        # the loggers back so post-run output flows normally again. The restore
+        # runs even if ``stop`` throws, so the takeover is never left in place.
+        try:
+            self._live.stop()
+        finally:
+            self._restore_logging()
 
     def _take_over_logging(self) -> None:
-        """Swap the project loggers onto the milestone handler for the run.
+        """Quiet the console log handlers for the run, without dropping the rest.
 
-        The handlers ``configure_logging`` installed write raw lines to stderr,
-        which would tear the live display; they are put back verbatim by
-        ``_restore_logging`` when the dashboard exits.
+        Only the console handlers (raw stderr ``StreamHandler``s) would tear the
+        live display, so those are removed for the duration and the dashboard's
+        own milestone handler is added in their place. Everything else stays —
+        crucially the OTEL export handler ``configure_logging`` may have
+        installed, whose telemetry must keep flowing on a real run. The removed
+        console handlers are restored verbatim by ``_restore_logging`` on exit.
         """
         for name in PACKAGE_LOGGERS:
             package_logger = logging.getLogger(name)
-            self._saved_handlers.append((package_logger, package_logger.handlers[:]))
-            package_logger.handlers = [self._log_handler]
+            original = package_logger.handlers[:]
+            self._saved_handlers.append((package_logger, original))
+            # Keep everything except the console handlers (raw stderr, which would
+            # tear the live region); the dashboard's milestone handler replaces
+            # them. ``FileHandler`` is a ``StreamHandler`` subclass but writes to
+            # a file, so it (and OTEL export, NullHandler, ...) is kept.
+            kept = [
+                handler
+                for handler in original
+                if not (isinstance(handler, logging.StreamHandler) and not isinstance(handler, logging.FileHandler))
+            ]
+            package_logger.handlers = [*kept, self._log_handler]
 
     def _restore_logging(self) -> None:
-        for package_logger, handlers in self._saved_handlers:
-            package_logger.handlers = handlers
+        # Restore the exact original handler list (order included) so the takeover
+        # leaves the loggers precisely as it found them.
+        for package_logger, original in self._saved_handlers:
+            package_logger.handlers = original
         self._saved_handlers.clear()
 
     # ------------------------------------------------------------------ #
@@ -160,6 +184,14 @@ class RunDashboard:
 
     def on_progress(self, event: RunEvent) -> None:
         """``RunEventSink``: fold the milestone into header state and history."""
+        if event.kind == "run_start":
+            # The run's opening statement — one persistent line above the whole
+            # climb; the header shows real activity from the next event on.
+            self._activity = "starting"
+            text = Text("▶ ", style="cyan")
+            text.append(event.message, style="bold")
+            self.note(text)
+            return
         self._activity = event.message
         if event.index is not None:
             self._cycle, self._total = event.index, event.total
@@ -192,9 +224,12 @@ class RunDashboard:
     # ------------------------------------------------------------------ #
 
     def note(self, text: Text) -> None:
-        """Print one persistent line above the live region."""
-        text.no_wrap = True
-        text.overflow = "ellipsis"
+        """Print one persistent milestone above the live region.
+
+        Milestones are scrollback history, so they wrap rather than ellipsize —
+        a long hypothesis stays complete (and copyable) after the run. Only the
+        live region itself keeps to one line per entry.
+        """
         self._console.print(text)
 
     def _note_check(self, message: str) -> None:
@@ -242,14 +277,27 @@ class RunDashboard:
             hypothesis = Text(f'  "{self._hypothesis}"', style="italic", no_wrap=True, overflow="ellipsis")
             lines.append(hypothesis)
 
-        if self._traces:
+        tail: list[RenderableType] = []
+        for event in list(self._traces):
+            trace = Text("  │ ", style="dim")
+            style = _TRACE_STYLES.get(event.kind, _TRACE_DEFAULT_STYLE)
+            if event.kind == "tool_result" and event.raw.get("is_error"):
+                # A failed tool call is the one tail line worth spotting.
+                style = "dim red"
+            trace.append(event.summary, style=style)
+            trace.no_wrap = True
+            trace.overflow = "ellipsis"
+            tail.append(trace)
+        if not tail and self._cycle is not None:
+            # A stage just changed and its agent hasn't streamed yet: keep one
+            # dim placeholder so the region still reads as "working".
+            tail.append(Text("  │ …", style="dim"))
+        if tail:
+            # Blank lines above and below so the tail breathes instead of
+            # butting against the header and the bottom of the terminal.
             lines.append(Text())
-            for event in list(self._traces):
-                trace = Text("  │ ", style="dim")
-                trace.append(event.summary, style=_TRACE_STYLES.get(event.kind, _TRACE_DEFAULT_STYLE))
-                trace.no_wrap = True
-                trace.overflow = "ellipsis"
-                lines.append(trace)
+            lines.extend(tail)
+            lines.append(Text())
 
         return Group(*lines)
 

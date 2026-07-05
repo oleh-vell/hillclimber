@@ -127,22 +127,40 @@ def test_run_refuses_to_start_on_a_dirty_artefact(tmp_path: Path):
         asyncio.run(hillclimber.run(tmp_path))
 
 
-def test_run_snapshots_a_dirty_artefact_when_auto_commit_set(tmp_path: Path):
+def test_run_snapshots_a_dirty_artefact_when_auto_commit_set(tmp_path: Path, monkeypatch):
     # Same dirty repo, but auto_commit opts into snapshotting instead of refusing.
+    # A zero-cycle budget + envelope scorer so the run reaches completion without
+    # a real harness; the snapshot is scored as the baseline.
     _git("init", cwd=tmp_path)
     # Inject the top-level auto_commit key before the first table so it doesn't
-    # land inside [agents.worker].
-    toml = _GUARD_TOML.format(path=tmp_path).replace("[scorer]", "auto_commit = true\n[scorer]", 1)
+    # land inside [agents.orchestrator].
+    toml = _PROGRESS_TOML.replace("[scorer]", "auto_commit = true\n[scorer]", 1)
     (tmp_path / "hillclimber.toml").write_text(toml)
     (tmp_path / "a.txt").write_text("x\n")
     _git("add", "-A", cwd=tmp_path)
     _git("commit", "-m", "init", cwd=tmp_path)
-    (tmp_path / "a.txt").write_text("changed\n")
+    head_before = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=tmp_path, capture_output=True, text=True, check=True
+    ).stdout.strip()
+    (tmp_path / "a.txt").write_text("changed\n")  # dirty working tree
 
-    # The snapshot path is scaffolded but not yet implemented, so it surfaces the
-    # NotImplementedError rather than the refusal — the run took the opt-in branch.
-    with pytest.raises(NotImplementedError, match="not implemented"):
-        asyncio.run(hillclimber.run(tmp_path))
+    async def _verified(self: ClaudeHarness, model: str) -> None:
+        return None
+
+    monkeypatch.setattr(ClaudeHarness, "verify_model", _verified)
+
+    status = asyncio.run(hillclimber.run(tmp_path))
+
+    # The run took the opt-in branch and completed (no cycles for a zero budget).
+    assert status.completed == 0
+    assert status.baseline_score.value == pytest.approx(0.42)
+    # Snapshotting is non-destructive: HEAD never moved and the user's dirty edit
+    # is still sitting uncommitted in the working tree.
+    head_after = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=tmp_path, capture_output=True, text=True, check=True
+    ).stdout.strip()
+    assert head_after == head_before
+    assert (tmp_path / "a.txt").read_text() == "changed\n"
 
 
 # --------------------------------------------------------------------------- #
@@ -184,7 +202,14 @@ def test_run_emits_baseline_and_preflight_progress_events(tmp_path: Path, monkey
     events: list[RunEvent] = []
     status = asyncio.run(hillclimber.run(tmp_path, progress_sink=events.append))
 
-    assert [e.kind for e in events] == ["preflight_start", "preflight_done", "baseline_start", "baseline_done"]
-    baseline_done = events[3]
+    assert [e.kind for e in events] == [
+        "run_start",
+        "preflight_start",
+        "preflight_done",
+        "baseline_start",
+        "baseline_done",
+    ]
+    assert "goal: improve" in events[0].message
+    baseline_done = events[4]
     assert baseline_done.score == pytest.approx(0.42)
     assert status.completed == 0

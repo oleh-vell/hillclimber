@@ -81,6 +81,11 @@ cycles = {cycles}
 kind = "command"
 cmd = "python eval.py"
 
+
+# kind = "none" to switch the sandbox off.
+[sandbox]
+kind = "seatbelt"
+
 {agent_tables}"""
 
 
@@ -234,7 +239,7 @@ def init(
         ),
     ] = False,
 ) -> None:
-    """Scaffold a new experiment: write a starter hillclimber.toml and eval.py into PATH."""
+    """Scaffold a new experiment"""
     target_dir = path or Path()
 
     if interactive:

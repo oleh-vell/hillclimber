@@ -8,6 +8,7 @@ how its result is scored — is pinned without shelling out to a real CLI.
 
 import asyncio
 import logging
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -15,7 +16,18 @@ import pytest
 import hillclimber  # noqa: F401  (initialise package before importing strategies)
 from harnesses import ClaudeHarness, Harness, TraceEvent, TraceSink
 from harnesses.claude import HarnessRun
-from hillclimber.models import Budget, Config, Cycle, CycleStatus, Goal, Score
+from hillclimber.lockfile import lock_path, read_events
+from hillclimber.models import (
+    Budget,
+    Config,
+    Cycle,
+    CycleRecorded,
+    CycleStatus,
+    ExperimentFinished,
+    ExperimentStarted,
+    Goal,
+    Score,
+)
 from hillclimber.progress import RunEvent, RunEventSink
 from sandboxes import PassthroughSandbox
 from strategies.base import CycleRecord
@@ -261,16 +273,19 @@ def _baseline(value: float = 0.5) -> Score:
     return Score(value=value, passed=True, scorer_id="command")
 
 
-def _exec_config(cycles: int, target: float | None = None) -> Config:
+def _exec_config(cycles: int, target: float | None = None, *, path: str) -> Config:
+    # ``path`` is required: execute writes ``.hillclimber/hillclimber.lock``
+    # under the artefact path, so every loop test points it at its tmp_path.
     config = _config()
+    config.path_to_artefact = path
     config.budget = Budget(cycles=cycles)
     config.goal = Goal(target=target)
     return config
 
 
-def test_execute_runs_until_budget_exhausted():
+def test_execute_runs_until_budget_exhausted(tmp_path: Path):
     chain = _StubChain([0.6, 0.7, 0.65])
-    status = asyncio.run(chain.execute(_exec_config(cycles=3), _baseline()))
+    status = asyncio.run(chain.execute(_exec_config(cycles=3, path=str(tmp_path)), _baseline()))
 
     assert status.completed == 3
     assert status.total == 3
@@ -283,9 +298,9 @@ def test_execute_runs_until_budget_exhausted():
     assert status.best.delta == pytest.approx(0.2)
 
 
-def test_execute_chains_each_cycle_off_the_previous_branch():
+def test_execute_chains_each_cycle_off_the_previous_branch(tmp_path: Path):
     chain = _StubChain([0.6, 0.7, 0.65])
-    asyncio.run(chain.execute(_exec_config(cycles=3), _baseline()))
+    asyncio.run(chain.execute(_exec_config(cycles=3, path=str(tmp_path)), _baseline()))
 
     parents = [parent for _, _, parent in chain.cycles_run]
     # Cycle 1 forks from the baseline ref; each later cycle forks from the
@@ -293,9 +308,9 @@ def test_execute_chains_each_cycle_off_the_previous_branch():
     assert parents == ["baseline", "hc/x_cycle_001", "hc/x_cycle_002"]
 
 
-def test_execute_mints_one_experiment_id_and_numbers_cycles():
+def test_execute_mints_one_experiment_id_and_numbers_cycles(tmp_path: Path):
     chain = _StubChain([0.6, 0.7])
-    asyncio.run(chain.execute(_exec_config(cycles=2), _baseline()))
+    asyncio.run(chain.execute(_exec_config(cycles=2, path=str(tmp_path)), _baseline()))
 
     exp_ids = {exp_id for exp_id, _, _ in chain.cycles_run}
     assert len(exp_ids) == 1  # one id for the whole experiment
@@ -303,18 +318,18 @@ def test_execute_mints_one_experiment_id_and_numbers_cycles():
     assert [index for _, index, _ in chain.cycles_run] == [1, 2]  # 1-based, sequential
 
 
-def test_execute_stops_early_when_goal_is_met():
+def test_execute_stops_early_when_goal_is_met(tmp_path: Path):
     chain = _StubChain([0.6, 0.75, 0.9])  # budget allows 5, but...
-    status = asyncio.run(chain.execute(_exec_config(cycles=5, target=0.7), _baseline()))
+    status = asyncio.run(chain.execute(_exec_config(cycles=5, target=0.7, path=str(tmp_path)), _baseline()))
 
     # cycle 2 reaches 0.75 >= target 0.7, so the climb stops before the budget.
     assert status.completed == 2
     assert len(chain.cycles_run) == 2
 
 
-def test_execute_runs_nothing_when_budget_is_zero():
+def test_execute_runs_nothing_when_budget_is_zero(tmp_path: Path):
     chain = _StubChain([])
-    status = asyncio.run(chain.execute(_exec_config(cycles=0), _baseline()))
+    status = asyncio.run(chain.execute(_exec_config(cycles=0, path=str(tmp_path)), _baseline()))
 
     assert status.completed == 0
     assert status.cycles == []
@@ -322,19 +337,19 @@ def test_execute_runs_nothing_when_budget_is_zero():
     assert chain.cycles_run == []
 
 
-def test_execute_runs_nothing_when_baseline_already_meets_goal():
+def test_execute_runs_nothing_when_baseline_already_meets_goal(tmp_path: Path):
     chain = _StubChain([0.9])
-    status = asyncio.run(chain.execute(_exec_config(cycles=3, target=0.5), _baseline(0.5)))
+    status = asyncio.run(chain.execute(_exec_config(cycles=3, target=0.5, path=str(tmp_path)), _baseline(0.5)))
 
     assert status.completed == 0
     assert chain.cycles_run == []
 
 
-def test_execute_emits_cycle_start_and_done_events():
+def test_execute_emits_cycle_start_and_done_events(tmp_path: Path):
     events: list[RunEvent] = []
     chain = _StubChain([0.6, 0.4], progress_sink=events.append)
 
-    asyncio.run(chain.execute(_exec_config(cycles=2), _baseline()))
+    asyncio.run(chain.execute(_exec_config(cycles=2, path=str(tmp_path)), _baseline()))
 
     assert [e.kind for e in events] == ["cycle_start", "cycle_done", "cycle_start", "cycle_done"]
     starts = [e for e in events if e.kind == "cycle_start"]
@@ -349,15 +364,177 @@ def test_execute_emits_cycle_start_and_done_events():
     assert done_2.delta == pytest.approx(-0.2)
 
 
-def test_execute_best_is_the_top_run_even_below_baseline():
+def test_execute_best_is_the_top_run_even_below_baseline(tmp_path: Path):
     chain = _StubChain([0.3, 0.4, 0.2])
-    status = asyncio.run(chain.execute(_exec_config(cycles=3), _baseline(0.5)))
+    status = asyncio.run(chain.execute(_exec_config(cycles=3, path=str(tmp_path)), _baseline(0.5)))
 
     # No cycle beats the baseline, but best is still the strongest cycle (cycle 2).
     assert status.completed == 3
     assert status.best is not None
     assert status.best.cycle_id == "cyc_002"
     assert status.best.delta == pytest.approx(-0.1)
+
+
+# --------------------------------------------------------------------------- #
+# execute -> hillclimber.lock (the experiment log)
+# --------------------------------------------------------------------------- #
+
+
+def test_execute_appends_started_cycle_and_finished_events(tmp_path: Path):
+    chain = _StubChain([0.6, 0.7])
+    status = asyncio.run(chain.execute(_exec_config(cycles=2, path=str(tmp_path)), _baseline()))
+
+    events = asyncio.run(read_events(lock_path(str(tmp_path))))
+    started, first, second, finished = events
+
+    assert isinstance(started, ExperimentStarted)
+    assert started.experiment_id == status.experiment_id
+    assert started.strategy == "chain"
+    assert started.baseline_score.value == 0.5
+    assert started.budget.cycles == 2
+
+    assert isinstance(first, CycleRecorded)
+    assert isinstance(second, CycleRecorded)
+    # The promotion carries the full settled Cycle, scores included.
+    assert first.cycle.index == 1
+    assert first.cycle.score_after is not None
+    assert first.cycle.score_after.value == 0.6
+    assert second.cycle.score_after is not None
+    assert second.cycle.score_after.value == 0.7
+
+    assert isinstance(finished, ExperimentFinished)
+    assert finished.experiment_id == status.experiment_id
+    assert finished.outcome == "completed"
+    assert finished.completed == 2
+    assert finished.best_cycle_id == "cyc_002"
+
+
+def test_execute_records_a_failed_finish_when_a_cycle_raises(tmp_path: Path):
+    class _FailingChain(_StubChain):
+        async def one_cycle(
+            self,
+            config: Config,
+            experiment_id: str,
+            index: int,
+            parent_ref: str,
+            parent_score: Score,
+        ) -> Cycle:
+            if index == 2:
+                raise RuntimeError("scorer exploded")
+            return await super().one_cycle(config, experiment_id, index, parent_ref, parent_score)
+
+    chain = _FailingChain([0.6, 0.7])
+    with pytest.raises(RuntimeError, match="scorer exploded"):
+        asyncio.run(chain.execute(_exec_config(cycles=2, path=str(tmp_path)), _baseline()))
+
+    events = asyncio.run(read_events(lock_path(str(tmp_path))))
+    started, recorded, finished = events
+    assert isinstance(started, ExperimentStarted)
+    assert isinstance(recorded, CycleRecorded)
+    assert recorded.cycle.index == 1
+    # The terminal line still lands, marking the experiment failed — cycle 1's
+    # settled result is preserved as the best so far.
+    assert isinstance(finished, ExperimentFinished)
+    assert finished.outcome == "failed"
+    assert finished.completed == 1
+    assert finished.best_cycle_id == "cyc_001"
+
+
+def test_execute_appends_across_runs_and_never_truncates(tmp_path: Path):
+    first = asyncio.run(_StubChain([0.6]).execute(_exec_config(cycles=1, path=str(tmp_path)), _baseline()))
+    second = asyncio.run(_StubChain([0.7]).execute(_exec_config(cycles=1, path=str(tmp_path)), _baseline()))
+
+    # Two experiments, one file: 2 x (started + cycle + finished), in order.
+    events = asyncio.run(read_events(lock_path(str(tmp_path))))
+    assert len(events) == 6
+    started_ids = [e.experiment_id for e in events if isinstance(e, ExperimentStarted)]
+    assert started_ids == [first.experiment_id, second.experiment_id]
+    assert first.experiment_id != second.experiment_id
+
+
+# --------------------------------------------------------------------------- #
+# one_cycle against a real repo (lock kept out of the cycle commit)
+# --------------------------------------------------------------------------- #
+
+
+class _EditingHarness(_RecordingHarness):
+    """A fake harness whose worker actually edits the artefact, like a real one."""
+
+    async def run(self, harness_run: HarnessRun, on_trace: TraceSink | None = None) -> str:
+        if harness_run.system_prompt == Chain.roles["worker"].default_prompt:
+            (Path(harness_run.path) / "improvement.txt").write_text("better\n")
+        return await super().run(harness_run, on_trace)
+
+
+_EVAL_CMD = """echo '{"hillclimber_eval": 1, "score": 0.7}'"""
+
+
+def _git_repo(path: Path) -> None:
+    def git(*args: str) -> None:
+        subprocess.run(
+            ["git", "-c", "user.email=t@t", "-c", "user.name=t", *args], cwd=path, check=True, capture_output=True
+        )
+
+    git("init")
+    (path / "a.txt").write_text("x\n")
+    git("add", ".")
+    git("commit", "-m", "init")
+
+
+def _tracked_files(repo: Path, ref: str = "HEAD") -> set[str]:
+    out = subprocess.run(["git", "ls-tree", "-r", "--name-only", ref], cwd=repo, capture_output=True, text=True)
+    return set(out.stdout.split())
+
+
+# The cycle's worktree/branch slug — the experiment's full 8-hex id (see
+# ``Chain.one_cycle``), which keeps branch names from colliding across runs.
+_CYCLE_WORKTREE = "hc_a1b2c3d4_cycle_001"
+_CYCLE_BRANCH = "hc/a1b2c3d4_cycle_001"
+
+
+def _one_cycle(chain: Chain, tmp_path: Path) -> Cycle:
+    config = _exec_config(cycles=1, path=str(tmp_path))
+    config.scorer.cmd = _EVAL_CMD
+    return asyncio.run(chain.one_cycle(config, "exp_a1b2c3d4", index=1, parent_ref="HEAD", parent_score=_baseline()))
+
+
+def test_one_cycle_keeps_the_lock_out_of_the_commit(tmp_path: Path):
+    _git_repo(tmp_path)
+    chain = Chain(PassthroughSandbox())
+    chain.harness = _EditingHarness()
+
+    cycle = _one_cycle(chain, tmp_path)
+
+    # The checkout is torn down after scoring; the branch keeps the commit, so the
+    # change lives on and no full worktree accumulates.
+    assert not (tmp_path / ".hillclimber" / _CYCLE_WORKTREE).exists()
+    tracked = _tracked_files(tmp_path, _CYCLE_BRANCH)
+    # The commit carries the worker's change but not the cycle's lock.
+    assert "improvement.txt" in tracked
+    assert "cyc_001.lock" not in tracked
+    # The settled state is on the returned cycle (its on-disk lock went with the
+    # worktree, but it was already promoted into hillclimber.lock by execute).
+    assert cycle.status == CycleStatus.scored
+    assert cycle.score_after is not None
+    assert cycle.score_after.value == 0.7
+    assert cycle.commit_sha is not None
+
+
+def test_one_cycle_tolerates_a_noop_worker(tmp_path: Path, caplog: pytest.LogCaptureFixture):
+    _git_repo(tmp_path)
+    chain = Chain(PassthroughSandbox())
+    chain.harness = _RecordingHarness()  # edits nothing — only the lock is dirty
+
+    with caplog.at_level(logging.WARNING, logger="strategies.base"):
+        cycle = _one_cycle(chain, tmp_path)
+
+    # Exclusion left nothing to commit: no crash, and the fork point is kept as
+    # the cycle's commit, flagged as a no-op. The worktree is still torn down.
+    base = subprocess.run(["git", "rev-parse", "HEAD"], cwd=tmp_path, capture_output=True, text=True)
+    assert cycle.commit_sha == base.stdout.strip()
+    assert not (tmp_path / ".hillclimber" / _CYCLE_WORKTREE).exists()
+    assert "cyc_001.lock" not in _tracked_files(tmp_path, _CYCLE_BRANCH)
+    assert any("no new commit" in message for message in caplog.messages)
 
 
 # --------------------------------------------------------------------------- #

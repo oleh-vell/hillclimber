@@ -218,6 +218,51 @@ def test_commit_all_commits_everything_and_returns_new_sha(tmp_path: Path):
     assert asyncio.run(git_utils.is_dirty(str(tmp_path))) is False
 
 
+def _tracked_files(path: Path) -> set[str]:
+    out = subprocess.run(["git", "ls-tree", "-r", "--name-only", "HEAD"], cwd=path, capture_output=True, text=True)
+    return set(out.stdout.split())
+
+
+def test_commit_all_keeps_excluded_patterns_out_of_the_commit(tmp_path: Path):
+    _repo_with_one_commit(tmp_path)
+    (tmp_path / "a.txt").write_text("changed\n")
+    (tmp_path / "cyc_001.lock").write_text("{}\n")
+
+    sha = asyncio.run(git_utils.commit_all(str(tmp_path), "msg", exclude=("cyc_*.lock",)))
+
+    assert sha == _rev_parse(tmp_path)
+    assert "a.txt" in _tracked_files(tmp_path)
+    assert "cyc_001.lock" not in _tracked_files(tmp_path)
+    # The excluded file stays on disk, just never enters history.
+    assert (tmp_path / "cyc_001.lock").exists()
+
+
+def test_commit_all_returns_head_when_only_excluded_files_changed(tmp_path: Path):
+    _repo_with_one_commit(tmp_path)
+    before = _rev_parse(tmp_path)
+    (tmp_path / "cyc_001.lock").write_text("{}\n")
+
+    sha = asyncio.run(git_utils.commit_all(str(tmp_path), "msg", exclude=("cyc_*.lock",)))
+
+    # Nothing left to stage -> no new commit, the current HEAD comes back.
+    assert sha == before
+    assert sha == _rev_parse(tmp_path)
+
+
+def test_init_seed_commit_excludes_hillclimber_workdir(tmp_path: Path):
+    # A leftover .hillclimber (e.g. a lock from a prior climb after .git was
+    # deleted) is runner state and must not land in the seeded baseline commit.
+    (tmp_path / "a.txt").write_text("x\n")
+    workdir = tmp_path / ".hillclimber"
+    workdir.mkdir()
+    (workdir / "hillclimber.lock").write_text("{}\n")
+
+    assert asyncio.run(git_utils.check_or_init_git(str(tmp_path))) is True
+
+    assert "a.txt" in _tracked_files(tmp_path)
+    assert not any(name.startswith(".hillclimber") for name in _tracked_files(tmp_path))
+
+
 # --------------------------------------------------------------------------- #
 # check_uncommitted_changes
 # --------------------------------------------------------------------------- #
@@ -247,3 +292,89 @@ def test_check_uncommitted_changes_ignores_hillclimber_workdir(tmp_path: Path):
     (workdir / "junk.lock").write_text("noise\n")
 
     assert asyncio.run(git_utils.check_uncommitted_changes(str(tmp_path))) is False
+
+
+# --------------------------------------------------------------------------- #
+# create_snapshot_commit (the auto_commit path)
+# --------------------------------------------------------------------------- #
+
+
+def _tracked_at(path: Path, ref: str) -> set[str]:
+    out = subprocess.run(["git", "ls-tree", "-r", "--name-only", ref], cwd=path, capture_output=True, text=True)
+    return set(out.stdout.split())
+
+
+def test_create_snapshot_commit_captures_dirty_tree_non_destructively(tmp_path: Path):
+    _repo_with_one_commit(tmp_path)  # a.txt = "x\n"
+    (tmp_path / "a.txt").write_text("changed\n")  # a tracked change...
+    (tmp_path / "new.txt").write_text("new\n")  # ...and an untracked file
+    head_before = _rev_parse(tmp_path)
+
+    sha = asyncio.run(git_utils.create_snapshot_commit(str(tmp_path), "snap"))
+
+    # A real commit, parented on HEAD, distinct from it.
+    assert sha != head_before
+    parent = subprocess.run(["git", "rev-parse", f"{sha}^"], cwd=tmp_path, capture_output=True, text=True)
+    assert parent.stdout.strip() == head_before
+    # Non-destructive: HEAD never moved and the working tree is still dirty.
+    assert _rev_parse(tmp_path) == head_before
+    assert (tmp_path / "a.txt").read_text() == "changed\n"
+    assert (tmp_path / "new.txt").read_text() == "new\n"
+    assert asyncio.run(git_utils.is_dirty(str(tmp_path))) is True
+    # The snapshot's tree carries both the tracked edit and the untracked file...
+    tracked = _tracked_at(tmp_path, sha)
+    assert {"a.txt", "new.txt"} <= tracked
+    # ...at their dirty contents, not HEAD's.
+    show = subprocess.run(["git", "show", f"{sha}:a.txt"], cwd=tmp_path, capture_output=True, text=True)
+    assert show.stdout == "changed\n"
+
+
+def test_create_snapshot_commit_excludes_hillclimber_workdir(tmp_path: Path):
+    _repo_with_one_commit(tmp_path)
+    (tmp_path / "a.txt").write_text("changed\n")
+    workdir = tmp_path / ".hillclimber"
+    workdir.mkdir()
+    (workdir / "junk.lock").write_text("noise\n")
+
+    sha = asyncio.run(git_utils.create_snapshot_commit(str(tmp_path), "snap"))
+
+    tracked = _tracked_at(tmp_path, sha)
+    assert "a.txt" in tracked
+    assert not any(name.startswith(".hillclimber") for name in tracked)
+
+
+# --------------------------------------------------------------------------- #
+# remove_worktree_if_present (best-effort teardown)
+# --------------------------------------------------------------------------- #
+
+
+def test_remove_worktree_if_present_is_a_noop_when_absent(tmp_path: Path):
+    _repo_with_one_commit(tmp_path)
+    # Nothing to remove: it must not raise.
+    asyncio.run(git_utils.remove_worktree_if_present(str(tmp_path), "hc_baseline"))
+
+
+def test_remove_worktree_if_present_clears_a_live_checkout(tmp_path: Path):
+    _repo_with_one_commit(tmp_path)
+    worktree = asyncio.run(git_utils.create_detached_worktree(str(tmp_path), "hc_baseline", "HEAD"))
+    assert Path(worktree).is_dir()
+
+    asyncio.run(git_utils.remove_worktree_if_present(str(tmp_path), "hc_baseline"))
+
+    assert not Path(worktree).exists()
+    # The path is immediately reusable by the next run.
+    asyncio.run(git_utils.create_detached_worktree(str(tmp_path), "hc_baseline", "HEAD"))
+
+
+def test_remove_worktree_if_present_clears_a_leftover_dir_without_registration(tmp_path: Path):
+    # A killed run can leave the directory with no live git registration; the
+    # best-effort teardown must still clear it so the path is reusable.
+    _repo_with_one_commit(tmp_path)
+    stale = tmp_path / ".hillclimber" / "hc_baseline"
+    stale.mkdir(parents=True)
+    (stale / "leftover.txt").write_text("x\n")
+
+    asyncio.run(git_utils.remove_worktree_if_present(str(tmp_path), "hc_baseline"))
+
+    assert not stale.exists()
+    asyncio.run(git_utils.create_detached_worktree(str(tmp_path), "hc_baseline", "HEAD"))

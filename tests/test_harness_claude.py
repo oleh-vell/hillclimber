@@ -5,9 +5,12 @@ from collections.abc import Sequence
 
 import pytest
 
+import harnesses.claude as claude_mod
+
 # Import the package first so it fully initialises (mirrors test_strategy_base).
 import hillclimber  # noqa: F401
 from harnesses import ClaudeHarness, Harness, TraceEvent, get_harness
+from harnesses._proc import AgentTimeout, exec_agent
 from harnesses.base import HarnessError
 from harnesses.claude import HarnessRun, _build_command, _build_verify_command, _parse_trace_line, run
 from hillclimber.models import Agent
@@ -20,12 +23,23 @@ def test_build_command_includes_required_flags():
     assert cmd[0] == "claude"
     assert "--print" in cmd
     assert "--dangerously-skip-permissions" in cmd
-    assert cmd[cmd.index("--system-prompt") + 1] == "be terse"
+    assert cmd[cmd.index("--system-prompt") + 1].startswith("be terse")
     # Runs stream NDJSON trace events; the CLI requires --verbose with it.
     assert cmd[cmd.index("--output-format") + 1] == "stream-json"
     assert "--verbose" in cmd
     # The task prompt is passed positionally after a "--" terminator.
     assert cmd[-2:] == ["--", "do it"]
+
+
+def test_build_command_appends_working_directory_note():
+    # --system-prompt replaces the CLI's default system prompt (and its env
+    # block), so the harness must tell the agent its working directory itself —
+    # otherwise it hallucinates absolute paths outside the worktree.
+    cmd = _build_command(HarnessRun(system_prompt="be terse", path="/tmp/hc_wt", prompt="do it"))
+    sp = cmd[cmd.index("--system-prompt") + 1]
+    assert sp.startswith("be terse")
+    assert "/tmp/hc_wt" in sp
+    assert "working directory" in sp
 
 
 def test_build_command_omits_model_by_default():
@@ -138,6 +152,37 @@ def test_run_streams_trace_events_in_order_and_returns_result(monkeypatch):
     # Summaries carry the "what is the agent doing" line the CLI will render.
     assert "claude-opus-4-8" in events[0].summary
     assert "src/pipeline.py" in events[2].summary
+
+
+# --------------------------------------------------------------------------- #
+# timeouts (a wedged CLI must not stall the climb forever)
+# --------------------------------------------------------------------------- #
+
+
+def test_exec_agent_times_out_and_kills_the_child(tmp_path):
+    # A real child that would run far longer than the ceiling is killed and the
+    # call raises AgentTimeout rather than blocking forever.
+    with pytest.raises(AgentTimeout):
+        asyncio.run(exec_agent(["sleep", "30"], str(tmp_path), PassthroughSandbox(), timeout=0.2))
+
+
+def test_run_maps_a_stream_timeout_to_a_runtime_error(monkeypatch):
+    async def _timeout(*args, **kwargs):
+        raise AgentTimeout("too slow")
+
+    monkeypatch.setattr(claude_mod, "stream_exec_agent", _timeout)
+    with pytest.raises(RuntimeError, match="timed out"):
+        asyncio.run(run(HarnessRun(system_prompt="sp", path=".", prompt="p"), PassthroughSandbox()))
+
+
+def test_verify_model_maps_a_timeout_to_a_harness_error(monkeypatch):
+    async def _timeout(*args, **kwargs):
+        raise AgentTimeout("too slow")
+
+    monkeypatch.setattr(claude_mod, "exec_agent", _timeout)
+    harness = ClaudeHarness(PassthroughSandbox())
+    with pytest.raises(HarnessError, match="did not respond"):
+        asyncio.run(harness.verify_model("opus"))
 
 
 def test_get_harness_returns_claude():
@@ -312,8 +357,7 @@ def test_parse_trace_line_maps_assistant_blocks():
     assert [e.kind for e in events] == ["thinking", "text", "tool_use"]
     assert events[0].summary == "hmm"
     assert events[1].summary == "hello"
-    assert events[2].summary.startswith("Bash(")
-    assert "git status" in events[2].summary
+    assert events[2].summary == "Bash: git status"
 
 
 def test_parse_trace_line_maps_tool_results():
@@ -331,14 +375,39 @@ def test_parse_trace_line_maps_result_and_keeps_raw_envelope():
     assert events[0].raw["is_error"] is False
 
 
-def test_parse_trace_line_clips_long_summaries_to_one_line():
+def test_parse_trace_line_flattens_and_caps_long_summaries():
     text = "word\n" * 200
     events = _parse_trace_line(
         json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}}).encode()
     )
     assert len(events) == 1
     assert "\n" not in events[0].summary
-    assert len(events[0].summary) <= 120
+    # The cap is a safety net against pathological lines, not a display width —
+    # rendering clips to the terminal (see hillclimber.cli.live).
+    assert len(events[0].summary) <= 500
+
+
+def test_summarize_tool_use_shows_the_salient_argument():
+    line = json.dumps(
+        {
+            "type": "assistant",
+            "message": {
+                "content": [
+                    {"type": "tool_use", "name": "Read", "input": {"file_path": "src/x.py", "limit": 100}},
+                    {"type": "tool_use", "name": "Grep", "input": {"pattern": "def run", "path": "src"}},
+                    {"type": "tool_use", "name": "Frobnicate", "input": {"target": "x"}},
+                    {"type": "tool_use", "name": "Bash", "input": {}},
+                ]
+            },
+        }
+    ).encode()
+    events = _parse_trace_line(line)
+    assert [e.summary for e in events] == [
+        "Read: src/x.py",
+        "Grep: def run",
+        "Frobnicate(target='x')",  # unknown tool keeps the kwargs dump
+        "Bash()",  # empty input falls back to a bare call
+    ]
 
 
 def test_parse_trace_line_tolerates_garbage_and_unknown_events():

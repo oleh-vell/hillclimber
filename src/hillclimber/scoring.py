@@ -17,6 +17,7 @@ Async per CLAUDE.md "Concurrency": the command is shelled out with
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 from pathlib import Path
 
@@ -80,7 +81,7 @@ def parse_eval(stdout: str) -> Eval:
     )
 
 
-async def run_scorer_command(scorer: Scorer, cwd: str | Path) -> tuple[int, str, str]:
+async def run_scorer_command(scorer: Scorer, cwd: str | Path, timeout: float | None = None) -> tuple[int, str, str]:
     """Run the scorer's command in ``cwd`` and capture what happened.
 
     The one place the scorer subprocess is spawned: ``score_artefact`` builds a
@@ -90,9 +91,15 @@ async def run_scorer_command(scorer: Scorer, cwd: str | Path) -> tuple[int, str,
     Args:
         scorer: The fitness function to run (v1: a command scorer).
         cwd: The directory to run the command in.
+        timeout: Wall-clock ceiling in seconds; ``None`` waits indefinitely. On
+            overrun the command (and its children) are killed and ``ScorerError``
+            is raised, so a hung eval never stalls the climb.
 
     Returns:
         ``(returncode, stdout, stderr)`` with the streams decoded.
+
+    Raises:
+        ScorerError: If the command does not finish within ``timeout`` seconds.
     """
     logger.debug("scoring: %s (cwd=%s)", scorer.cmd, cwd)
     proc = await asyncio.create_subprocess_shell(
@@ -101,44 +108,71 @@ async def run_scorer_command(scorer: Scorer, cwd: str | Path) -> tuple[int, str,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    stdout, stderr = await proc.communicate()
+    try:
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout)
+    except TimeoutError as exc:
+        raise ScorerError(f"scorer {scorer.cmd!r} exceeded the {timeout}s timeout in {cwd}") from exc
+    finally:
+        # Covers the timeout and a cancelled climb: kill and reap the shell so a
+        # hung or aborted scorer never leaks its process.
+        if proc.returncode is None:
+            with contextlib.suppress(ProcessLookupError):
+                proc.kill()
+            with contextlib.suppress(Exception):
+                await proc.wait()
     # ``communicate`` only returns once the process exited, so returncode is set.
     assert proc.returncode is not None
     return proc.returncode, stdout.decode(), stderr.decode()
 
 
-async def score_artefact(scorer: Scorer, cwd: str | Path, *, require_success: bool = False) -> Score:
+async def score_artefact(
+    scorer: Scorer, cwd: str | Path, *, require_success: bool = False, timeout: float | None = None
+) -> Score:
     """Score the artefact in ``cwd`` with ``scorer``.
 
     A command scorer runs its ``cmd`` in ``cwd``; the command emits its ``Eval``
     as JSON on stdout (see ``Eval``), and that ``Eval.score`` is the climbable
     value.
 
-    A command that fails to run (non-zero exit) is handled one of two ways:
+    A scorer that does not yield a usable number — a non-zero exit, a timeout, or
+    an exit-0 run that printed no valid ``Eval`` envelope — is handled one of two
+    ways:
 
-    - ``require_success`` false (default, per-cycle scoring): the failure scores
-        ``0.0`` with ``passed`` false — a broken hypothesis is just a bad score.
-    - ``require_success`` true (the baseline): the failure raises ``ScorerError``.
-        A scorer that cannot run is a misconfiguration, not a score of zero, and
-        there is no hill to climb without a valid baseline — so abort loudly
-        rather than fabricate a ``0.0`` the whole run would then climb against.
+    - ``require_success`` false (default, per-cycle scoring): it scores ``0.0``
+        with ``passed`` false. A broken hypothesis is just a bad score, and the
+        worker can even break the eval script in its own worktree — that must not
+        abort the whole experiment, only sink that one cycle.
+    - ``require_success`` true (the baseline): it raises. A scorer that cannot
+        produce a baseline is a misconfiguration, not a score of zero, and there
+        is no hill to climb without a valid baseline — so abort loudly rather
+        than fabricate a ``0.0`` the whole run would then climb against.
 
     Args:
         scorer: The fitness function to run (v1: a command scorer).
         cwd: The directory to score in — the artefact directory for the baseline,
             a run's worktree once a hypothesis has been applied.
-        require_success: Treat a non-zero exit as fatal (raise ``ScorerError``)
-            rather than a ``0.0`` score. Set for the baseline.
+        require_success: Treat any unscorable outcome as fatal (raise) rather than
+            a ``0.0`` score. Set for the baseline.
+        timeout: Wall-clock ceiling in seconds for the scorer command; ``None``
+            waits indefinitely (see ``run_scorer_command``).
 
     Returns:
-        The ``Score`` — ``Eval.score`` as ``value`` when the command ran, else
-        ``0.0`` with ``passed`` false.
+        The ``Score`` — ``Eval.score`` as ``value`` when the command produced a
+        valid envelope, else ``0.0`` with ``passed`` false.
 
     Raises:
-        ScorerError: If the command failed (non-zero exit) and ``require_success``.
-        ValueError: If the command ran but emitted no valid ``Eval`` envelope.
+        ScorerError: If the command failed/timed out and ``require_success``.
+        ValueError: If the command exited 0 but emitted no valid ``Eval``
+            envelope and ``require_success``.
     """
-    returncode, stdout, stderr = await run_scorer_command(scorer, cwd)
+    try:
+        returncode, stdout, stderr = await run_scorer_command(scorer, cwd, timeout)
+    except ScorerError:
+        # A timeout (or other run failure) surfaced from the subprocess layer.
+        if require_success:
+            raise
+        logger.warning("scorer did not complete; scoring 0.0")
+        return Score(value=0.0, passed=False, scorer_id=scorer.kind)
 
     if returncode != 0:
         detail = stderr.strip()
@@ -147,5 +181,14 @@ async def score_artefact(scorer: Scorer, cwd: str | Path, *, require_success: bo
         logger.warning("scorer failed (exit=%s): %s", returncode, detail)
         return Score(value=0.0, passed=False, scorer_id=scorer.kind)
 
-    evaluation = parse_eval(stdout)
+    try:
+        evaluation = parse_eval(stdout)
+    except ValueError:
+        # Exit 0 but no parseable envelope: for a required baseline this is a
+        # real misconfiguration, but for a per-cycle score it is just a hypothesis
+        # that left the eval unable to report — a bad score, not a run-ender.
+        if require_success:
+            raise
+        logger.warning("scorer exited 0 but emitted no valid eval envelope; scoring 0.0")
+        return Score(value=0.0, passed=False, scorer_id=scorer.kind)
     return Score(value=evaluation.score, passed=True, scorer_id=scorer.kind)

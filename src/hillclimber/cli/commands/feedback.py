@@ -94,7 +94,7 @@ def feedback(
         typer.Argument(help="The feedback to send. Omit it to be prompted interactively."),
     ] = None,
 ) -> None:
-    """Send feedback to the hillclimber author (relayed to him via Telegram)."""
+    """Send your feedback"""
     state: CLIState = ctx.obj
 
     if message is None:

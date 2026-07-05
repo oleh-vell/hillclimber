@@ -1,4 +1,4 @@
-"""The HILLCLIMBER wordmark for the interactive wizard.
+"""CLI flavor: the HILLCLIMBER wordmark and the run's opening phrases.
 
 Both banners were rasterized once from the project's Gameplay pixel font
 (``fe/src/fonts/gameplay.ttf``) into half-block characters, so the terminal
@@ -8,6 +8,8 @@ narrow one fits an 80-column terminal.
 """
 
 from __future__ import annotations
+
+import random
 
 from rich.console import Console
 
@@ -28,6 +30,26 @@ BANNER_NARROW = """\
 ██  ██ ██ ▀█████ ▀█████ ██████ ▀█████ ██ ██   ██ █████▀ ▀█████ ██  ██"""
 
 _WIDE_COLUMNS = 88
+
+# One of these opens every interactive ``hillclimber run`` — a wink before the
+# climb starts. Keep them short and lowercase: they render as one dim line.
+RUN_PHRASES = (
+    "lacing up the boots…",
+    "one hill to climb",
+    "starting the ascent",
+    "chalking up…",
+    "the summit won't come to us",
+    "checking the weather at base camp",
+    "every score is a foothold",
+    "up and to the right",
+    "first, the trailhead",
+    "altitude is just a number",
+)
+
+
+def run_phrase() -> str:
+    """A random opening phrase for ``hillclimber run``."""
+    return random.choice(RUN_PHRASES)
 
 
 def print_banner(console: Console) -> None:

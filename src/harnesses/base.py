@@ -46,7 +46,7 @@ class TraceEvent(BaseModel):
     """
 
     kind: Literal["init", "thinking", "text", "tool_use", "tool_result", "result"]
-    summary: str  # one human-readable line, e.g. "Read(src/pipeline.py)"
+    summary: str  # one human-readable line, e.g. "Read: src/pipeline.py"
     raw: dict[str, Any]  # the untouched backend payload behind this event
     label: str | None = None  # who is running, stamped by the strategy (e.g. "cycle 003/worker")
 
@@ -107,11 +107,22 @@ class Harness(ABC):
         model is probed once, concurrently, via :meth:`verify_model` (which must
         stay a trivial backend round-trip, never real agent work).
 
+        The probes run in a ``TaskGroup`` so the first failure cancels the
+        siblings — no probe subprocess is left running past the point the
+        preflight is already doomed.
+
         Raises:
             HarnessError: If any model can't be run by this harness.
         """
         models = dict.fromkeys(agent.model for agent in agents)
-        await asyncio.gather(*(self.verify_model(model) for model in models))
+        try:
+            async with asyncio.TaskGroup() as group:
+                for model in models:
+                    group.create_task(self.verify_model(model))
+        except* HarnessError as failures:
+            # TaskGroup wraps failures in an ExceptionGroup; surface the first
+            # probe error directly so callers keep the flat HarnessError contract.
+            raise failures.exceptions[0] from None
 
     @abstractmethod
     async def verify_model(self, model: str) -> None:

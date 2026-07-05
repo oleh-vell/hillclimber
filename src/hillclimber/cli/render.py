@@ -9,10 +9,14 @@ nothing here reaches back into the core.
 
 from __future__ import annotations
 
+from pathlib import Path
+
+from rich.markup import escape
 from rich.table import Table
 from rich.text import Text
 
 from hillclimber.cli.console import console
+from hillclimber.git_utils import repo_root
 from hillclimber.models import CycleSummary, ExperimentStatus
 
 
@@ -45,6 +49,32 @@ def experiment_summary(status: ExperimentStatus) -> None:
     for cycle in status.cycles:
         table.add_row(*_cycle_row(cycle, is_best=cycle.cycle_id == best_id))
     console.print(table)
+
+
+def next_step(status: ExperimentStatus, artefact: str, target_arg: str) -> str:
+    """The one-line next action after a climb, as Rich markup.
+
+    Either the exact ``git merge`` command that brings the best cycle's branch
+    into the user's current branch, or — when nothing beat the baseline — the
+    ``--append`` rerun that keeps climbing. Shared by the end of ``hillclimber
+    run`` and by ``hillclimber status`` so the two can never disagree on what
+    to do next. ``target_arg`` is the path argument to echo into suggested
+    hillclimber commands (empty when the user ran against the current
+    directory, so the suggestion stays as short as what they actually typed).
+    """
+    best = status.best
+    merge_ref = (best.branch or best.commit_sha) if best is not None else None
+    if best is not None and best.delta > 0 and merge_ref:
+        # The merge must run inside the artefact repo; spell out -C when the
+        # user's shell is somewhere else so the command is copy-pasteable.
+        root = repo_root(artefact)
+        location = "" if root.resolve() == Path.cwd().resolve() else f"-C {root} "
+        return f"To merge best score: [bold]git {location}merge {escape(merge_ref)}[/]"
+
+    # There is history but nothing beat the baseline: climb again on top of it
+    # (plain ``run`` would stop at the overwrite prompt).
+    suffix = f" {target_arg}" if target_arg else ""
+    return f"No cycle beat the baseline yet — to keep climbing: [bold]hillclimber run{suffix} --append[/]"
 
 
 def _cycle_row(cycle: CycleSummary, is_best: bool) -> tuple[Text, Text, Text, Text]:

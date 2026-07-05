@@ -9,13 +9,19 @@ is the seam for adding more (an API harness, etc.) later.
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 from harnesses.base import Harness, HarnessError, TraceEvent, TraceSink
 from harnesses.claude import ClaudeHarness
 from sandboxes.base import Sandbox
 
+if TYPE_CHECKING:
+    from hillclimber.models import Timeouts
+
 # Canonical name -> factory. Alternate spellings live in ``_ALIASES``, never here.
-_HARNESSES: dict[str, Callable[[Sandbox], Harness]] = {
+# Every factory takes ``(sandbox, timeouts)`` so the runner's wall-clock ceilings
+# reach the harness (see ``get_harness`` / ``Timeouts``).
+_HARNESSES: dict[str, Callable[..., Harness]] = {
     "claude": ClaudeHarness,
 }
 
@@ -32,7 +38,7 @@ def _canonical(name: str) -> str:
     return _ALIASES.get(normalized, normalized)
 
 
-def resolve_harness(name: str) -> Callable[[Sandbox], Harness]:
+def resolve_harness(name: str) -> Callable[..., Harness]:
     """The factory behind ``name`` — the sandbox-free half of :func:`get_harness`.
 
     Lets config checks validate a harness name without building anything.
@@ -47,13 +53,19 @@ def resolve_harness(name: str) -> Callable[[Sandbox], Harness]:
         raise ValueError(f"unknown harness: {name!r} (known: {known})") from None
 
 
-def get_harness(name: str, sandbox: Sandbox) -> Harness:
+def get_harness(name: str, sandbox: Sandbox, timeouts: Timeouts | None = None) -> Harness:
     """Return a fresh harness instance for ``name``, built with ``sandbox``.
+
+    Args:
+        name: The harness name (as written in ``Agent.harness``).
+        sandbox: The OS sandbox confining the harness's agent runs.
+        timeouts: Wall-clock ceilings applied to the harness's subprocesses;
+            ``None`` lets the harness fall back to its generous defaults.
 
     Raises:
         ValueError: If ``name`` is not a known harness or alias.
     """
-    return resolve_harness(name)(sandbox)
+    return resolve_harness(name)(sandbox, timeouts)
 
 
 __all__ = ["ClaudeHarness", "Harness", "HarnessError", "TraceEvent", "TraceSink", "get_harness", "resolve_harness"]

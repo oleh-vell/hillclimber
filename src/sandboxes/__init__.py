@@ -9,10 +9,14 @@ for adding more (bubblewrap, docker, ...) later, mirroring
 
 from __future__ import annotations
 
-from hillclimber.models import PassthroughSandboxConfig, SandboxConfig, SeatbeltSandboxConfig
+from typing import TYPE_CHECKING
+
 from sandboxes.base import Sandbox
 from sandboxes.passthrough import PassthroughSandbox
 from sandboxes.seatbelt import SeatbeltSandbox
+
+if TYPE_CHECKING:
+    from hillclimber.models import SandboxConfig
 
 
 def get_sandbox(config: SandboxConfig) -> Sandbox:
@@ -29,6 +33,12 @@ def get_sandbox(config: SandboxConfig) -> Sandbox:
         ValueError: If ``config`` is an unknown sandbox kind.
         RuntimeError: If a Seatbelt sandbox is built on a non-macOS platform.
     """
+    # Imported here, not at module level: the config variants live in
+    # ``hillclimber.models``, and importing them at import time closes a cycle
+    # (harnesses -> sandboxes -> hillclimber -> hillclimber.run -> sandboxes)
+    # that breaks whichever package is imported first.
+    from hillclimber.models import PassthroughSandboxConfig, SeatbeltSandboxConfig
+
     if isinstance(config, SeatbeltSandboxConfig):
         return SeatbeltSandbox(deny_read=config.deny_read, network=config.network)
     if isinstance(config, PassthroughSandboxConfig):

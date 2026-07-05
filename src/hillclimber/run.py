@@ -20,14 +20,12 @@ from hillclimber.git_utils import (
     check_uncommitted_changes,
     create_detached_worktree,
     create_snapshot_commit,
-    remove_worktree,
+    remove_worktree_if_present,
 )
 from hillclimber.models import Config, ExperimentStatus, Score
 from hillclimber.progress import RunEvent, RunEventSink, ignore_progress
 from hillclimber.scoring import score_artefact
 from hillclimber.telemetry import get_logger
-from sandboxes import get_sandbox
-from strategies.registry import get_strategy, verify_agents
 
 logger = get_logger(__name__)
 
@@ -61,11 +59,35 @@ async def run(
     Returns:
         The final ``ExperimentStatus`` produced by the strategy.
     """
+    # Imported here, not at module level: ``hillclimber.__init__`` imports this
+    # module eagerly, and the strategy/sandbox registries import back into
+    # ``harnesses``/``hillclimber.models`` — a top-level import here closes a
+    # cycle that breaks whichever package happens to be imported first.
+    from sandboxes import get_sandbox
+    from strategies.registry import get_strategy, verify_agents
+
     emit = progress_sink if progress_sink is not None else ignore_progress
     logger.info("loading experiment from %s", path)
     config = load_config(path)
+    # The run's opening statement: what is being improved and what success
+    # looks like, before any milestone lands.
+    goal_clause = (
+        f"raise the eval score to {config.goal.target:.3f}"
+        if config.goal.target is not None
+        else "maximize the eval score"
+    )
+    emit(
+        RunEvent(
+            kind="run_start",
+            message=f"goal: improve {config.path_to_artefact} — {goal_clause} (budget: {config.budget.cycles} cycles)",
+        )
+    )
     logger.info(
-        "artefact=%s strategy=%s budget=%d cycles", config.path_to_artefact, config.strategy, config.budget.cycles
+        "artefact=%s strategy=%s budget=%d cycles goal=%s",
+        config.path_to_artefact,
+        config.strategy,
+        config.budget.cycles,
+        f"{config.goal.target:.3f}" if config.goal.target is not None else "maximize",
     )
     # A missing strategy role raises here; an unused agent table only warns.
     for warning in verify_agents(config):
@@ -77,7 +99,15 @@ async def run(
     # ``auto_commit`` set, snapshot the dirty tree into a commit and climb from that.
     if await check_uncommitted_changes(config.path_to_artefact):
         if config.auto_commit:
-            await create_snapshot_commit(config.path_to_artefact, "hillclimber: snapshot uncommitted changes")
+            # Capture the dirty tree as a non-destructive commit and climb from
+            # it: routing the snapshot sha through ``start_branch`` makes both the
+            # baseline (scored at that ref) and cycle 1 (forked from it) measure
+            # the same code, including the user's in-progress edits.
+            snapshot = await create_snapshot_commit(
+                config.path_to_artefact, "hillclimber: snapshot uncommitted changes"
+            )
+            config.start_branch = snapshot
+            logger.info("auto_commit: climbing from snapshot %s", snapshot)
         else:
             raise RuntimeError(
                 f"artefact has uncommitted changes at {config.path_to_artefact}; "
@@ -88,7 +118,9 @@ async def run(
     # The sandbox confines every agent CLI to its worktree; the strategy
     # threads it down into the harness.
     sandbox = get_sandbox(config.sandbox)
-    strategy = get_strategy(config.strategy)(sandbox, trace_sink=trace_sink, progress_sink=progress_sink)
+    strategy = get_strategy(config.strategy)(
+        sandbox, trace_sink=trace_sink, progress_sink=progress_sink, timeouts=config.timeout
+    )
     # Preflight before scoring: a bad model alias or an unauthed CLI fails here,
     # not after the baseline eval has been paid for. Only the strategy's roles
     # are probed — an unused agent table is ignored, as verify_agents promised.
@@ -142,12 +174,22 @@ async def get_baseline_score(config: Config) -> Score:
         # Score committed state at the start ref, isolated in a throwaway
         # checkout so it can differ from the working tree without touching it.
         await check_or_init_git(config.path_to_artefact)
+        # A killed prior run can leave a stale ``hc_baseline`` (dir + git
+        # registration) that would make ``worktree add`` fail with an opaque
+        # error; clear it best-effort before creating a fresh one.
+        await remove_worktree_if_present(config.path_to_artefact, _BASELINE_WORKTREE)
         worktree = await create_detached_worktree(config.path_to_artefact, _BASELINE_WORKTREE, config.start_branch)
         try:
-            score = await score_artefact(config.scorer, worktree, require_success=True)
+            score = await score_artefact(
+                config.scorer, worktree, require_success=True, timeout=config.timeout.scorer_seconds
+            )
         finally:
-            await remove_worktree(config.path_to_artefact, _BASELINE_WORKTREE)
+            # Best-effort so a teardown error can never mask a ScorerError from
+            # the scoring above (the branch keeps nothing here — it is detached).
+            await remove_worktree_if_present(config.path_to_artefact, _BASELINE_WORKTREE)
     else:
-        score = await score_artefact(config.scorer, config.path_to_artefact, require_success=True)
+        score = await score_artefact(
+            config.scorer, config.path_to_artefact, require_success=True, timeout=config.timeout.scorer_seconds
+        )
     logger.info("baseline scored: %.3f", score.value)
     return score

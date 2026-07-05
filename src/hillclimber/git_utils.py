@@ -12,6 +12,10 @@ blocks the event loop (see CLAUDE.md "Concurrency").
 from __future__ import annotations
 
 import asyncio
+import os
+import shutil
+import tempfile
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from hillclimber.telemetry import get_logger
@@ -32,18 +36,21 @@ _GIT_IDENTITY = (
 )
 
 
-async def _git_capture(repo: Path, *args: str) -> tuple[int, str, str]:
+async def _git_capture(repo: Path, *args: str, env: Mapping[str, str] | None = None) -> tuple[int, str, str]:
     """Run ``git *args`` in ``repo``; return ``(returncode, stdout, stderr)``.
 
     A thin wrapper over ``asyncio.create_subprocess_exec`` (never
     ``subprocess.run``; see CLAUDE.md "Concurrency") so git invocations don't
     block the event loop. Used where the command's stdout matters (``rev-parse``,
-    ``status``); :func:`_git` wraps it for the common stderr-only case.
+    ``status``); :func:`_git` wraps it for the common stderr-only case. ``env``
+    overrides the child's environment (e.g. ``GIT_INDEX_FILE`` for the
+    non-destructive snapshot; see :func:`create_snapshot_commit`).
     """
     proc = await asyncio.create_subprocess_exec(
         "git",
         *args,
         cwd=repo,
+        env=dict(env) if env is not None else None,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
@@ -58,11 +65,13 @@ async def _git(repo: Path, *args: str) -> tuple[int, str]:
     return rc, stderr
 
 
-def _repo_root(path: str) -> Path:
+def repo_root(path: str) -> Path:
     """Resolve the git repo root for ``path``.
 
     ``path`` may point at either a directory (the repo) or a file (e.g. a
     single-file artefact), in which case its containing directory is the repo.
+    Public because path-derived state (e.g. ``lockfile.lock_path``) needs the
+    same file-or-directory resolution the git helpers use.
 
     Raises:
         FileNotFoundError: If ``path`` does not exist.
@@ -100,7 +109,7 @@ async def check_or_init_git(path: str) -> bool:
         FileNotFoundError: If ``path`` does not exist.
         RuntimeError: If ``git init``, staging, or the baseline commit fails.
     """
-    repo = _repo_root(path)
+    repo = repo_root(path)
 
     if (repo / ".git").exists():
         return False
@@ -109,10 +118,11 @@ async def check_or_init_git(path: str) -> bool:
     if rc != 0:
         raise RuntimeError(f"git init failed in {repo}: {stderr}")
 
-    # Seed a baseline commit so HEAD is a valid worktree base. Stage everything,
-    # then commit with ``--allow-empty`` so even an empty artefact directory still
-    # yields a real HEAD.
-    rc, stderr = await _git(repo, "add", "-A")
+    # Seed a baseline commit so HEAD is a valid worktree base. Stage everything
+    # except ``.hillclimber`` (a leftover lock/worktree dir from a prior climb is
+    # runner state, not artefact), then commit with ``--allow-empty`` so even an
+    # empty artefact directory still yields a real HEAD.
+    rc, stderr = await _git(repo, "add", "-A", "--", ".", ":(exclude).hillclimber")
     if rc != 0:
         raise RuntimeError(f"git add failed in {repo}: {stderr}")
     rc, stderr = await _git(repo, *_GIT_IDENTITY, "commit", "--allow-empty", "-m", "hillclimber: baseline")
@@ -145,7 +155,7 @@ async def create_worktree(path: str, name: str, branch: str, base_ref: str) -> s
         FileNotFoundError: If ``path`` does not exist.
         RuntimeError: If ``git worktree add`` fails.
     """
-    repo = _repo_root(path)
+    repo = repo_root(path)
     worktree = repo / ".hillclimber" / name
     logger.debug("creating worktree %s on branch %s off %s", worktree, branch, base_ref)
     proc = await asyncio.create_subprocess_exec(
@@ -185,7 +195,7 @@ async def create_detached_worktree(path: str, name: str, ref: str) -> str:
         FileNotFoundError: If ``path`` does not exist.
         RuntimeError: If ``git worktree add`` fails (e.g. ``ref`` does not exist).
     """
-    repo = _repo_root(path)
+    repo = repo_root(path)
     worktree = repo / ".hillclimber" / name
     logger.debug("creating detached worktree %s at %s", worktree, ref)
     rc, stderr = await _git(repo, "worktree", "add", "--detach", str(worktree), ref)
@@ -209,11 +219,32 @@ async def remove_worktree(path: str, name: str) -> None:
         FileNotFoundError: If ``path`` does not exist.
         RuntimeError: If ``git worktree remove`` fails.
     """
-    repo = _repo_root(path)
+    repo = repo_root(path)
     worktree = repo / ".hillclimber" / name
     rc, stderr = await _git(repo, "worktree", "remove", "--force", str(worktree))
     if rc != 0:
         raise RuntimeError(f"git worktree remove failed in {repo}: {stderr}")
+
+
+async def prune_worktrees(path: str) -> None:
+    """Drop git's records of worktrees whose directories no longer exist.
+
+    The companion to deleting worktree checkouts wholesale (rmtree, not
+    ``git worktree remove`` — see ``lockfile.reset_history``): git keeps its
+    per-worktree metadata until pruned, and a stale entry would block adding
+    a new worktree at the same path later.
+
+    Args:
+        path: A directory or file inside the artefact repo; its root is used.
+
+    Raises:
+        FileNotFoundError: If ``path`` does not exist.
+        RuntimeError: If ``git worktree prune`` fails.
+    """
+    repo = repo_root(path)
+    rc, stderr = await _git(repo, "worktree", "prune")
+    if rc != 0:
+        raise RuntimeError(f"git worktree prune failed in {repo}: {stderr}")
 
 
 async def head_sha(worktree: str) -> str:
@@ -252,31 +283,59 @@ async def is_dirty(worktree: str) -> bool:
     return bool(stdout)
 
 
-async def commit_all(worktree: str, message: str) -> str:
+async def commit_all(worktree: str, message: str, exclude: Sequence[str] = ()) -> str:
     """Stage everything in ``worktree`` and commit it; return the new commit sha.
 
     Used both to snapshot a dirty baseline and as the backstop when a worker
     applies a change but forgets to commit it (see ``Chain._commit_cycle``). The
     hillclimber identity is supplied inline so it works without global git config.
 
+    ``exclude`` patterns are kept out of the commit (git pathspec globs, e.g.
+    ``cyc_*.lock`` — runner state that must not enter the artefact's history).
+    When exclusion leaves nothing staged (only excluded files changed), no
+    commit is made and the current ``HEAD`` is returned instead — callers see
+    an unchanged sha rather than a "nothing to commit" failure.
+
     Args:
         worktree: The checkout to commit.
         message: The commit message.
+        exclude: Pathspec glob patterns to keep out of the commit.
 
     Returns:
-        The sha of the commit just created.
+        The sha of the commit just created, or the current ``HEAD`` when
+        nothing remained to commit after exclusions.
 
     Raises:
         RuntimeError: If staging or committing fails.
     """
     repo = Path(worktree)
-    rc, stderr = await _git(repo, "add", "-A")
+    pathspec = [".", *(f":(exclude){pattern}" for pattern in exclude)]
+    rc, stderr = await _git(repo, "add", "-A", "--", *pathspec)
     if rc != 0:
         raise RuntimeError(f"git add failed in {worktree}: {stderr}")
+    # ``diff --cached --quiet`` exits 0 when nothing is staged, 1 when something
+    # is; anything else is a real error.
+    rc, _stdout, stderr = await _git_capture(repo, "diff", "--cached", "--quiet")
+    if rc == 0:
+        return await head_sha(worktree)
+    if rc != 1:
+        raise RuntimeError(f"git diff --cached failed in {worktree}: {stderr}")
     rc, stderr = await _git(repo, *_GIT_IDENTITY, "commit", "-m", message)
     if rc != 0:
         raise RuntimeError(f"git commit failed in {worktree}: {stderr}")
     return await head_sha(worktree)
+
+
+def _make_snapshot_index() -> str:
+    """Create and return the path to a throwaway git index file.
+
+    A thin typed wrapper over ``tempfile.mkstemp`` (whose return widens to
+    ``str | bytes`` when offloaded via ``asyncio.to_thread``) so the caller gets
+    a plain ``str`` path. The fd is closed immediately; git reopens the path.
+    """
+    fd, path = tempfile.mkstemp(prefix="hc_snapshot_index_")
+    os.close(fd)
+    return path
 
 
 async def create_snapshot_commit(path: str, message: str) -> str:
@@ -301,13 +360,65 @@ async def create_snapshot_commit(path: str, message: str) -> str:
         The sha of the snapshot commit the climb should fork from.
 
     Raises:
-        NotImplementedError: Always — the snapshot path is scaffolded but not yet
-            implemented.
+        FileNotFoundError: If ``path`` does not exist.
+        RuntimeError: If any of the underlying git plumbing commands fail.
     """
-    raise NotImplementedError(
-        "auto_commit snapshotting is not implemented yet; commit or stash the "
-        "artefact's changes manually, or set auto_commit = false"
-    )
+    repo = repo_root(path)
+
+    # A throwaway index so staging never touches the user's real index or
+    # working tree. ``GIT_INDEX_FILE`` redirects every git command below at it;
+    # seeded from HEAD so unchanged tracked files carry over, then the working
+    # tree's changes (tracked and untracked) are staged on top.
+    index_file = await asyncio.to_thread(_make_snapshot_index)
+    env = {**os.environ, "GIT_INDEX_FILE": index_file}
+    try:
+        rc, _stdout, stderr = await _git_capture(repo, "read-tree", "HEAD", env=env)
+        if rc != 0:
+            raise RuntimeError(f"git read-tree failed in {repo}: {stderr}")
+        rc, _stdout, stderr = await _git_capture(repo, "add", "-A", "--", ".", ":(exclude).hillclimber", env=env)
+        if rc != 0:
+            raise RuntimeError(f"git add failed in {repo}: {stderr}")
+        rc, tree, stderr = await _git_capture(repo, "write-tree", env=env)
+        if rc != 0:
+            raise RuntimeError(f"git write-tree failed in {repo}: {stderr}")
+        # ``commit-tree`` builds a commit object parented on HEAD without moving
+        # any ref — the snapshot is reachable only by the sha it returns, so the
+        # user's branch and HEAD stay exactly where they were.
+        rc, sha, stderr = await _git_capture(
+            repo, *_GIT_IDENTITY, "commit-tree", tree, "-p", "HEAD", "-m", message, env=env
+        )
+        if rc != 0:
+            raise RuntimeError(f"git commit-tree failed in {repo}: {stderr}")
+    finally:
+        await asyncio.to_thread(lambda: os.path.exists(index_file) and os.remove(index_file))
+
+    logger.info("snapshotted dirty artefact tree as %s (non-destructive)", sha)
+    return sha
+
+
+async def remove_worktree_if_present(path: str, name: str) -> None:
+    """Best-effort teardown of the worktree ``name`` — never raises.
+
+    Unlike :func:`remove_worktree`, this is for cleanup paths that must not mask
+    a real error (a cycle's ``finally``, a stale ``hc_baseline`` from a killed
+    run): it force-removes the checkout, deletes any leftover directory git's own
+    remove could not, and prunes the now-dangling registration so the same path
+    is immediately reusable. Failures are logged, not raised.
+
+    Args:
+        path: A directory or file inside the artefact repo; its root is used.
+        name: The worktree directory name (under ``.hillclimber``) to remove.
+    """
+    repo = repo_root(path)
+    worktree = repo / ".hillclimber" / name
+    rc, stderr = await _git(repo, "worktree", "remove", "--force", str(worktree))
+    if rc != 0:
+        logger.debug("git worktree remove for %s returned %d: %s", worktree, rc, stderr)
+    if await asyncio.to_thread(worktree.exists):
+        await asyncio.to_thread(shutil.rmtree, worktree, ignore_errors=True)
+    # Drop any registration left dangling by the rmtree so a later add can reuse
+    # the path (see ``prune_worktrees``).
+    await _git(repo, "worktree", "prune")
 
 
 async def check_uncommitted_changes(path: str) -> bool:
@@ -334,7 +445,7 @@ async def check_uncommitted_changes(path: str) -> bool:
         FileNotFoundError: If ``path`` does not exist.
         RuntimeError: If ``git status`` fails.
     """
-    repo = _repo_root(path)
+    repo = repo_root(path)
     if not (repo / ".git").exists():
         return False
     rc, stdout, stderr = await _git_capture(repo, "status", "--porcelain", "--", ".", ":(exclude).hillclimber")

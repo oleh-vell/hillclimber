@@ -35,8 +35,9 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from harnesses._proc import exec_agent, stream_exec_agent
+from harnesses._proc import AgentTimeout, exec_agent, stream_exec_agent
 from harnesses.base import Harness, HarnessError, TraceEvent, TraceSink
+from hillclimber.models import Timeouts
 from hillclimber.telemetry import get_logger
 from sandboxes.base import Sandbox
 
@@ -83,6 +84,23 @@ class HarnessRun(BaseModel):
     model: str | None = None  # model alias or full id; None -> CLI default
 
 
+def _env_note(path: str) -> str:
+    """The working-directory note appended to every run's system prompt.
+
+    ``--system-prompt`` *replaces* the CLI's default system prompt, and with it
+    the env block that normally tells the agent its working directory. Without
+    this note the agent does not know where it is and invents plausible absolute
+    paths (reading files under directories that don't exist) until a tool error
+    happens to leak the real cwd back to it.
+    """
+    return (
+        f"\n\nYour working directory is {path} — the artefact checkout. All the "
+        "files you work on live under it. Refer to files by relative path or by "
+        "absolute path under this directory; paths anywhere else are outside "
+        "your sandbox and do not exist for you."
+    )
+
+
 def _build_command(run: HarnessRun) -> list[str]:
     """Build the ``claude`` argv for ``run``.
 
@@ -91,7 +109,8 @@ def _build_command(run: HarnessRun) -> list[str]:
     ``--`` terminator so a prompt that happens to start with ``-`` is never
     mistaken for a flag. ``stream-json`` makes the CLI emit NDJSON events as the
     agent works (the trace stream); the CLI requires ``--verbose`` alongside it
-    in ``--print`` mode.
+    in ``--print`` mode. The system prompt is the role's SP plus the
+    working-directory note (see :func:`_env_note`).
     """
     cmd = [
         "claude",
@@ -101,7 +120,7 @@ def _build_command(run: HarnessRun) -> list[str]:
         "--verbose",
         "--dangerously-skip-permissions",
         "--system-prompt",
-        run.system_prompt,
+        run.system_prompt + _env_note(run.path),
     ]
     if run.model is not None:
         cmd += ["--model", run.model]
@@ -142,27 +161,52 @@ def _make_verify_workdir() -> str:
     return tempfile.mkdtemp(prefix="hc_verify_")
 
 
-# Width of a trace event's one-line ``summary``. Full payloads stay in
-# ``TraceEvent.raw``; the summary is for a log line or a live-view row.
-_SUMMARY_WIDTH = 120
+# Safety cap on a trace event's one-line ``summary`` — against pathological
+# megabyte lines, not a display width. Clipping to the terminal is the
+# renderer's job (see ``hillclimber.cli.live``); full payloads stay in
+# ``TraceEvent.raw``.
+_SUMMARY_WIDTH = 500
 
 
 def _clip(text: str) -> str:
-    """Collapse ``text`` to one line and clip it to summary width."""
+    """Collapse ``text`` to one line and cap it at summary width."""
     flat = " ".join(text.split())
     if len(flat) <= _SUMMARY_WIDTH:
         return flat
     return flat[: _SUMMARY_WIDTH - 1] + "…"
 
 
+# The one argument that identifies a call for well-known tools, so a trace line
+# reads ``Bash: uv run pytest`` instead of a kwargs dump. Unknown tools (or a
+# known tool missing its argument) fall back to the call-like rendering.
+_TOOL_SALIENT_ARG = {
+    "Bash": "command",
+    "Read": "file_path",
+    "Write": "file_path",
+    "Edit": "file_path",
+    "NotebookEdit": "notebook_path",
+    "Grep": "pattern",
+    "Glob": "pattern",
+    "Task": "description",
+    "Agent": "description",
+}
+
+
 def _summarize_tool_use(block: dict[str, Any]) -> str:
-    """Render a ``tool_use`` block as one call-like line, e.g. ``Read(file_path='x.py')``."""
+    """Render a ``tool_use`` block as one line: the tool and what it acts on.
+
+    Well-known tools show just their salient argument (``Read: src/x.py``);
+    anything else keeps the call-like kwargs dump (``Foo(bar='baz')``).
+    """
     name = block.get("name") or "tool"
     tool_input = block.get("input")
-    if isinstance(tool_input, dict) and tool_input:
-        rendered = ", ".join(f"{key}={value!r}" for key, value in tool_input.items())
-        return _clip(f"{name}({rendered})")
-    return f"{name}()"
+    if not isinstance(tool_input, dict) or not tool_input:
+        return f"{name}()"
+    salient = _TOOL_SALIENT_ARG.get(name)
+    if salient is not None and salient in tool_input:
+        return _clip(f"{name}: {tool_input[salient]}")
+    rendered = ", ".join(f"{key}={value!r}" for key, value in tool_input.items())
+    return _clip(f"{name}({rendered})")
 
 
 def _summarize_tool_result(block: dict[str, Any]) -> str:
@@ -242,6 +286,7 @@ async def run(
     sandbox: Sandbox,
     on_trace: TraceSink | None = None,
     write_allow: Sequence[str] = _CLAUDE_WRITE_ALLOW,
+    timeout: float | None = None,
 ) -> str:
     """Run the Claude Code agent described by ``harness_run`` and return its reply.
 
@@ -260,13 +305,16 @@ async def run(
             to run silently.
         write_allow: The CLI's runtime-state dirs the sandbox re-allows writes
             to (defaults to :data:`_CLAUDE_WRITE_ALLOW`).
+        timeout: Wall-clock ceiling in seconds for the CLI run; ``None`` waits
+            indefinitely. On overrun the process is killed and a ``RuntimeError``
+            is raised rather than the climb stalling forever.
 
     Returns:
         The agent's final assistant message as plain text.
 
     Raises:
-        RuntimeError: If the CLI exits non-zero, ends its stream without a
-            ``result`` event, or reports an error in that event.
+        RuntimeError: If the CLI exits non-zero, overruns ``timeout``, ends its
+            stream without a ``result`` event, or reports an error in that event.
     """
     logger.debug("invoking claude in %s (model=%s)", harness_run.path, harness_run.model or "<default>")
     result_payload: dict[str, Any] | None = None
@@ -279,9 +327,13 @@ async def run(
             if on_trace is not None:
                 on_trace(event)
 
-    stderr, returncode = await stream_exec_agent(
-        _build_command(harness_run), harness_run.path, sandbox, handle_line, write_allow
-    )
+    try:
+        stderr, returncode = await stream_exec_agent(
+            _build_command(harness_run), harness_run.path, sandbox, handle_line, write_allow, timeout
+        )
+    except AgentTimeout as exc:
+        logger.error("claude timed out after %ss in %s", timeout, harness_run.path)
+        raise RuntimeError(f"claude timed out after {timeout}s in {harness_run.path}") from exc
     if returncode != 0:
         logger.error("claude exited %s in %s", returncode, harness_run.path)
         raise RuntimeError(f"claude exited {returncode}: {stderr.decode().strip()}")
@@ -306,13 +358,17 @@ class ClaudeHarness(Harness):
     # The claude CLI's per-session state dirs (see the constant's rationale).
     write_allow = _CLAUDE_WRITE_ALLOW
 
-    def __init__(self, sandbox: Sandbox) -> None:
+    def __init__(self, sandbox: Sandbox, timeouts: Timeouts | None = None) -> None:
         self.sandbox = sandbox
+        # The wall-clock ceilings applied to every CLI invocation — a real run
+        # and the (much shorter) preflight probe. ``None`` -> the generous
+        # defaults, so a harness built without config still can't hang forever.
+        self.timeouts = timeouts if timeouts is not None else Timeouts()
 
     async def run(self, harness_run: HarnessRun, on_trace: TraceSink | None = None) -> str:
         # Bare ``run`` resolves to the module-level function above — class scope
         # is not part of method name resolution, so this is not a self-call.
-        return await run(harness_run, self.sandbox, on_trace, self.write_allow)
+        return await run(harness_run, self.sandbox, on_trace, self.write_allow, self.timeouts.agent_seconds)
 
     async def verify_model(self, model: str) -> None:
         """Probe the ``claude`` CLI with ``model`` and a one-token health check.
@@ -332,10 +388,15 @@ class ClaudeHarness(Harness):
         workdir = await asyncio.to_thread(_make_verify_workdir)
         try:
             # Same write-allow as a real run: the probe forbids tools, but the
-            # CLI itself may still touch its session state at startup.
+            # CLI itself may still touch its session state at startup. The short
+            # verify timeout keeps a wedged CLI from stalling the whole preflight.
             stdout, stderr, returncode = await exec_agent(
-                _build_verify_command(model), workdir, self.sandbox, self.write_allow
+                _build_verify_command(model), workdir, self.sandbox, self.write_allow, self.timeouts.verify_seconds
             )
+        except AgentTimeout as exc:
+            raise HarnessError(
+                f"claude did not respond within {self.timeouts.verify_seconds}s verifying model {model!r}"
+            ) from exc
         finally:
             await asyncio.to_thread(shutil.rmtree, workdir, ignore_errors=True)
 

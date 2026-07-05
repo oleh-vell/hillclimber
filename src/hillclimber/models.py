@@ -3,7 +3,8 @@
 Three levels of types:
 
 - **Write models** (persisted, authoritative): ``Experiment`` -> ``hillclimber.toml``,
-  ``Cycle`` -> ``cyc_<NNN>.lock``.
+  ``Cycle`` -> ``cyc_<NNN>.lock``, ``LockEvent`` (``ExperimentStarted`` /
+  ``CycleRecorded`` / ``ExperimentFinished``) -> ``hillclimber.lock``.
 - **Read model** (computed on demand, never stored): ``ExperimentStatus`` /
   ``CycleSummary``. Powers ``hillclimber status``. *Best-so-far* is computed here,
   not persisted anywhere.
@@ -16,11 +17,18 @@ it, print it, discard it. It must never gain a method that mutates or persists.
 from __future__ import annotations
 
 import math
+from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
+
+
+def _utcnow() -> datetime:
+    """Timestamp for lock events — UTC so logs from different hosts compare."""
+    return datetime.now(UTC)
+
 
 # --------------------------------------------------------------------------- #
 # Shared value types
@@ -115,6 +123,11 @@ class SeatbeltSandboxConfig(BaseModel):
     ``network`` gates outbound access. Selecting this kind on a non-macOS
     platform hard-errors at sandbox construction (see ``SeatbeltSandbox``) —
     use ``kind = "none"`` to opt out explicitly.
+
+    Note: ``git`` does not work inside a cycle worktree under this sandbox — the
+    worktree's ``.git`` file targets the read-denied ``<repo>/.git/worktrees/...``
+    (see ``SeatbeltSandbox``). The ``chain`` strategy commits from outside the
+    sandbox so agents never need git; a strategy that does must account for this.
     """
 
     kind: Literal["seatbelt"] = "seatbelt"
@@ -187,7 +200,7 @@ class Goal(BaseModel):
     """
 
     direction: str = "maximize"  # v1: "maximize" only
-    target: float | None = None  # optional success threshold (early-stop hook; unused in v1)
+    target: float | None = None  # optional success threshold; reaching it stops the climb early
 
     def is_met(self, best: Score | None) -> bool:
         """Whether ``best`` satisfies the goal — the loop's early-stop check.
@@ -206,6 +219,24 @@ class Goal(BaseModel):
         if best is None or self.target is None:
             return False
         return best.value >= self.target
+
+
+class Timeouts(BaseModel):
+    """Wall-clock ceilings for the subprocesses a climb shells out to.
+
+    Nothing the runner spawns — an agent CLI, the preflight probe, the scorer —
+    can be trusted to always return: a wedged ``claude`` process or a hung eval
+    would otherwise stall a multi-hour climb forever. Each ceiling caps one kind
+    of child; hitting it kills the child and fails that step (the agent/scorer
+    with an error, a per-cycle scorer as a ``0.0``). ``None`` disables a ceiling.
+
+    Defaults are deliberately generous for real agent/scorer work and short for
+    the health-check probe, which is a single one-token round-trip.
+    """
+
+    agent_seconds: float | None = 1800.0  # a single agent run (propose/apply)
+    verify_seconds: float | None = 120.0  # the preflight model probe (see Harness.verify_model)
+    scorer_seconds: float | None = 600.0  # one scorer invocation (see scoring.run_scorer_command)
 
 
 class Budget(BaseModel):
@@ -266,6 +297,9 @@ class Config(BaseModel):
     strategy: str = DEFAULT_STRATEGY
     goal: Goal = Field(default_factory=Goal)  # what the climb optimizes toward
     budget: Budget  # hard stop condition (v1: cycles only)
+    # Wall-clock ceilings on the subprocesses the climb spawns, so a wedged agent
+    # CLI or a hung eval can never stall the run forever (see ``Timeouts``).
+    timeout: Timeouts = Field(default_factory=Timeouts)
     # One ``[agents.<role>]`` table per role. Which roles are required is the
     # strategy's declaration, checked by ``strategies.registry.verify_agents``.
     agents: dict[str, Agent] = Field(default_factory=dict)
@@ -331,6 +365,55 @@ class Cycle(BaseModel):
         return f"cyc_{self.index:03d}"
 
 
+# The experiment lock events. One artefact has one ``hillclimber.lock`` — an
+# append-only JSONL log under ``.hillclimber/`` holding every experiment ever
+# run against it (see ``hillclimber.lockfile``). Each line is one of these
+# events; the ``event`` field is the discriminator. The log is never rewritten
+# or truncated — history only accumulates.
+
+
+class ExperimentStarted(BaseModel):
+    """The first line an experiment appends to ``hillclimber.lock``."""
+
+    event: Literal["experiment_started"] = "experiment_started"
+    experiment_id: str  # exp_<8hex>, minted by Strategy.new_experiment_id
+    strategy: str  # which strategy drives the climb, e.g. "chain"
+    baseline_score: Score  # the number every cycle must beat
+    budget: Budget  # total planned cycles
+    timestamp: datetime = Field(default_factory=_utcnow)
+
+
+class CycleRecorded(BaseModel):
+    """A settled cycle promoted from its ``cyc_<NNN>.lock`` into the experiment log.
+
+    Carries the full ``Cycle`` verbatim — the promotion *is* the cycle record,
+    and ``cycle.experiment_id`` is the single owner reference (not duplicated
+    here, so the two can never drift).
+    """
+
+    event: Literal["cycle_recorded"] = "cycle_recorded"
+    cycle: Cycle
+    timestamp: datetime = Field(default_factory=_utcnow)
+
+
+class ExperimentFinished(BaseModel):
+    """The terminal line for one experiment. Absent -> running or interrupted."""
+
+    event: Literal["experiment_finished"] = "experiment_finished"
+    experiment_id: str
+    outcome: Literal["completed", "failed"]
+    completed: int  # cycles that settled
+    best_cycle_id: str | None = None  # e.g. "cyc_002"; None if nothing scored
+    timestamp: datetime = Field(default_factory=_utcnow)
+
+
+# One line of ``hillclimber.lock``; ``event`` discriminates the kind.
+LockEvent = Annotated[
+    ExperimentStarted | CycleRecorded | ExperimentFinished,
+    Field(discriminator="event"),
+]
+
+
 # --------------------------------------------------------------------------- #
 # Read model (computed on demand, never stored)
 # --------------------------------------------------------------------------- #
@@ -346,6 +429,36 @@ class CycleSummary(BaseModel):
     score_after: Score | None = None
     accepted: bool
     delta: float  # score_after - baseline (computed)
+    # Where the cycle's change lives, so ``hillclimber status`` can point at the
+    # winner and print a real merge command. The branch outlives the worktree
+    # (reset keeps branches), so it is the durable ref to merge.
+    branch: str = ""
+    worktree: str = ""
+    commit_sha: str | None = None
+
+    @classmethod
+    def from_cycle(cls, cycle: Cycle, baseline: Score) -> CycleSummary:
+        """Flatten a settled ``cycle`` into its display summary.
+
+        ``delta`` is the cycle's improvement over the *baseline*; an unscored
+        cycle (no ``score_after``) reports a zero delta. The one flattening
+        used by both the live loop (``Chain._summarize``) and the lock-file
+        fold (``lockfile.fold_statuses``), so the two can never drift.
+        """
+        after = cycle.score_after
+        delta = after.value - baseline.value if after is not None else 0.0
+        return cls(
+            experiment_id=cycle.experiment_id,
+            cycle_id=cycle.cycle_id,
+            status=cycle.status,
+            hypothesis=cycle.hypothesis,
+            score_after=after,
+            accepted=cycle.accepted,
+            delta=delta,
+            branch=cycle.branch,
+            worktree=cycle.worktree,
+            commit_sha=cycle.commit_sha,
+        )
 
 
 class ExperimentStatus(BaseModel):
@@ -353,9 +466,13 @@ class ExperimentStatus(BaseModel):
     ``hillclimber status``. ``best`` is COMPUTED (``max(cycles, key=score)``),
     not persisted anywhere."""
 
+    experiment_id: str = ""
     baseline_score: Score
     cycles: list[CycleSummary]
     best: CycleSummary | None = None  # COMPUTED, not stored
     in_progress: list[str] = Field(default_factory=list)  # cycle ids currently running
     completed: int
     total: int
+    # Folded from the lock: no ExperimentFinished line -> "running", which also
+    # covers *interrupted* — the log cannot tell a live run from a crashed one.
+    state: Literal["running", "completed", "failed"] = "completed"

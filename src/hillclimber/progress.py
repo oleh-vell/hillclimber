@@ -34,6 +34,7 @@ class RunEvent(BaseModel):
     """
 
     kind: Literal[
+        "run_start",
         "baseline_start",
         "baseline_done",
         "preflight_start",

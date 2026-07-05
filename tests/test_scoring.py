@@ -19,7 +19,7 @@ from pathlib import Path
 import pytest
 
 from hillclimber.models import CommandScorer, Eval
-from hillclimber.scoring import parse_eval, score_artefact
+from hillclimber.scoring import ScorerError, parse_eval, score_artefact
 
 
 def _make_artefact(root: Path, score: float) -> None:
@@ -62,6 +62,37 @@ def test_absolute_scorer_path_scores_the_wrong_copy(tmp_path: Path):
 
     # Scores the ORIGINAL 0.10, never the worktree's 0.90 — isolation defeated.
     assert score.value == 0.10
+
+
+# --------------------------------------------------------------------------- #
+# unscorable outcomes: 0.0 per-cycle, but fatal for a required baseline
+# --------------------------------------------------------------------------- #
+
+
+def test_score_artefact_missing_envelope_scores_zero_when_not_required(tmp_path: Path):
+    # Exit 0 but no envelope (e.g. a hypothesis that broke the eval script in its
+    # own worktree): a per-cycle score is 0.0/passed false, not a run-ender.
+    score = asyncio.run(score_artefact(CommandScorer(cmd="true"), tmp_path))
+    assert score.value == 0.0
+    assert score.passed is False
+
+
+def test_score_artefact_missing_envelope_raises_for_a_required_baseline(tmp_path: Path):
+    # The baseline must be real: no envelope is a misconfiguration, not a 0.0.
+    with pytest.raises(ValueError, match="hillclimber_eval"):
+        asyncio.run(score_artefact(CommandScorer(cmd="true"), tmp_path, require_success=True))
+
+
+def test_score_artefact_timeout_scores_zero_when_not_required(tmp_path: Path):
+    # A hung eval is killed at the ceiling and scored 0.0 rather than stalling.
+    score = asyncio.run(score_artefact(CommandScorer(cmd="sleep 30"), tmp_path, timeout=0.2))
+    assert score.value == 0.0
+    assert score.passed is False
+
+
+def test_score_artefact_timeout_raises_for_a_required_baseline(tmp_path: Path):
+    with pytest.raises(ScorerError, match="timeout"):
+        asyncio.run(score_artefact(CommandScorer(cmd="sleep 30"), tmp_path, require_success=True, timeout=0.2))
 
 
 # --------------------------------------------------------------------------- #

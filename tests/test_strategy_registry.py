@@ -158,13 +158,14 @@ def test_run_dispatches_the_strategy_through_the_registry(tmp_path: Path, monkey
 
 def test_run_fails_on_a_missing_role_before_any_work(tmp_path: Path):
     # Only the orchestrator is configured; the run must fail on the agents
-    # check — before scoring the baseline, so no progress event is emitted.
+    # check — before scoring the baseline, so nothing lands after the run's
+    # opening statement.
     _experiment_dir(tmp_path, agents='[agents.orchestrator]\nharness = "claude"\nmodel = "m"\n')
 
     events: list[RunEvent] = []
     with pytest.raises(ValueError, match=re.escape("please add [agents.worker]")):
         asyncio.run(hillclimber.run(tmp_path, progress_sink=events.append))
-    assert events == []
+    assert [e.kind for e in events] == ["run_start"]
 
 
 def test_run_warns_but_continues_on_an_unused_role(tmp_path: Path, monkeypatch, caplog):

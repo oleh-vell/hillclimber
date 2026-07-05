@@ -16,6 +16,19 @@ Empirically validated on macOS (these facts drive the profile shape):
 - ``/tmp`` is a symlink to ``/private/tmp``; profile paths must be the realpath or
   rules silently fail to match. Every embedded path is ``os.path.realpath``'d.
 
+Every path embedded in the profile is also run through :func:`_sb_quote`: the
+profile is an S-expression with double-quoted string literals, so a worktree
+path containing a ``"`` or ``\\`` (unusual, but the config author's to choose)
+would otherwise break profile compilation or inject stray policy rules.
+
+``git`` is **not** usable inside a cycle worktree under this sandbox: the
+worktree's ``.git`` file points at ``<repo>/.git/worktrees/...``, which sits
+under a read-denied root, so any ``git`` invocation there fails with a
+misleading "not a git repository". The ``chain`` strategy is designed around
+this (the runner commits the worker's edits from outside the sandbox); a
+strategy that needs git inside the worktree must widen ``deny_read`` or run
+those steps unsandboxed.
+
 Selecting this backend on a non-macOS platform hard-errors at construction: a
 sandbox that silently no-ops is worse than none. Use the ``none`` backend
 (``PassthroughSandbox``) to opt out explicitly.
@@ -28,6 +41,16 @@ import sys
 from collections.abc import Sequence
 
 from sandboxes.base import Sandbox
+
+
+def _sb_quote(path: str) -> str:
+    """Escape ``path`` for embedding inside a double-quoted Seatbelt string literal.
+
+    The profile is an S-expression; a raw ``"`` would close the literal early
+    (injecting policy) and a raw ``\\`` could escape the closing quote. Backslash
+    is escaped first so the escapes added for quotes are not themselves doubled.
+    """
+    return path.replace("\\", "\\\\").replace('"', '\\"')
 
 
 def _render_profile(workdir: str, deny_read: list[str], network: bool, write_allow: Sequence[str] = ()) -> str:
@@ -64,10 +87,10 @@ def _render_profile(workdir: str, deny_read: list[str], network: bool, write_all
         "; writes: deny everything, then re-allow the worktree + essentials",
         "(deny file-write*)",
         "(allow file-write*",
-        f'  (subpath "{work}")',
+        f'  (subpath "{_sb_quote(work)}")',
         '  (subpath "/private/var/folders")',
         # The harness's runtime-state dirs (per-session scratch its CLI needs).
-        *(f'  (subpath "{a}")' for a in allows),
+        *(f'  (subpath "{_sb_quote(a)}")' for a in allows),
         '  (regex #"^/dev/tty")',
         '  (literal "/dev/null"))',
     ]
@@ -80,11 +103,11 @@ def _render_profile(workdir: str, deny_read: list[str], network: bool, write_all
         lines.append("")
         lines.append("; reads: deny the sensitive trees, then re-allow the worktree LAST (last-match-wins)")
         lines.append("(deny file-read*")
-        deny_lines = [f'  (subpath "{r}")' for r in roots]
+        deny_lines = [f'  (subpath "{_sb_quote(r)}")' for r in roots]
         deny_lines[-1] += ")"
         lines.extend(deny_lines)
         lines.append("(allow file-read*")
-        lines.append(f'  (subpath "{work}"))')
+        lines.append(f'  (subpath "{_sb_quote(work)}"))')
 
     if not network:
         lines.append("")

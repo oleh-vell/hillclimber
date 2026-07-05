@@ -35,6 +35,34 @@ def _trace(summary: str) -> TraceEvent:
 # --------------------------------------------------------------------------- #
 
 
+def test_run_start_prints_the_goal_as_a_persistent_milestone():
+    console, buffer = _console()
+    dashboard = RunDashboard(console)
+
+    dashboard.on_progress(
+        RunEvent(kind="run_start", message="goal: improve ./artefact — raise the eval score to 0.900")
+    )
+
+    assert "goal: improve ./artefact" in buffer.getvalue()
+    # The header shows real activity from the next event on, not the goal text.
+    assert dashboard._activity == "starting"
+
+
+def test_milestones_wrap_instead_of_truncating():
+    console, buffer = _console()  # width=100
+    dashboard = RunDashboard(console)
+    hypothesis = "swap the tokenizer for a regex " * 8  # well past one line
+
+    dashboard.on_progress(
+        RunEvent(kind="cycle_stage", message="applying", index=1, total=2, stage="applying", hypothesis=hypothesis)
+    )
+
+    # Milestones are scrollback history: every word survives, none ellipsized.
+    output = buffer.getvalue()
+    assert "…" not in output
+    assert output.count("regex") == 8
+
+
 def test_baseline_done_sets_the_score_and_prints_a_milestone():
     console, buffer = _console()
     dashboard = RunDashboard(console)
@@ -90,6 +118,35 @@ def test_trace_tail_keeps_only_the_last_events():
     assert [event.summary for event in dashboard._traces] == ["step 7", "step 8", "step 9"]
 
 
+def test_trace_tail_defaults_to_four_lines():
+    dashboard = RunDashboard(_console()[0])
+
+    assert dashboard._traces.maxlen == 4
+
+
+def test_empty_tail_shows_a_placeholder_once_a_cycle_is_active():
+    console, buffer = _console()
+    dashboard = RunDashboard(console)
+    dashboard.on_progress(
+        RunEvent(kind="cycle_stage", message="proposing a hypothesis", index=1, total=2, stage="proposing")
+    )
+
+    console.print(dashboard._render())
+
+    # No trace yet, but the region still reads as "working".
+    assert "│ …" in buffer.getvalue()
+
+
+def test_no_placeholder_before_any_cycle():
+    console, buffer = _console()
+    dashboard = RunDashboard(console)
+    dashboard.on_progress(RunEvent(kind="baseline_start", message="scoring the baseline"))
+
+    console.print(dashboard._render())
+
+    assert "│" not in buffer.getvalue()
+
+
 def test_stage_changes_clear_the_stale_tail():
     dashboard = RunDashboard(_console()[0])
     dashboard.on_trace(_trace("Read(pipeline.py)"))
@@ -137,6 +194,35 @@ def test_dashboard_reroutes_warnings_and_restores_handlers():
 
     assert package_logger.handlers == handlers_before
     assert "scorer flaked once" in buffer.getvalue()
+
+
+def test_dashboard_keeps_non_console_handlers_so_otel_export_survives():
+    # The takeover only quiets the console handlers; a non-StreamHandler (stand-in
+    # for the OTEL export handler configure_logging may have installed) must keep
+    # receiving records for the one command where export matters.
+    console, _ = _console()
+    package_logger = logging.getLogger("hillclimber")
+
+    exported: list[str] = []
+
+    class _CaptureHandler(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            exported.append(record.getMessage())
+
+    export_handler = _CaptureHandler()
+    package_logger.addHandler(export_handler)
+    try:
+        with RunDashboard(console):
+            # The non-console handler is still attached while the dashboard owns
+            # the terminal...
+            assert export_handler in package_logger.handlers
+            logging.getLogger("hillclimber.run").warning("ship me to otel")
+        # ...and is restored verbatim afterwards.
+        assert export_handler in package_logger.handlers
+    finally:
+        package_logger.removeHandler(export_handler)
+
+    assert "ship me to otel" in exported
 
 
 # --------------------------------------------------------------------------- #

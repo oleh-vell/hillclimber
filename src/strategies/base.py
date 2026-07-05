@@ -21,8 +21,8 @@ from pathlib import Path
 from typing import ClassVar
 
 from harnesses import Harness, TraceEvent, TraceSink, get_harness
-from hillclimber.git_utils import commit_all, head_sha, is_dirty
-from hillclimber.models import Agent, Config, Cycle, ExperimentStatus, Score
+from hillclimber.git_utils import commit_all
+from hillclimber.models import Agent, Config, Cycle, ExperimentStatus, Score, Timeouts
 from hillclimber.progress import RunEventSink, ignore_progress
 from hillclimber.telemetry import get_logger
 from sandboxes.base import Sandbox
@@ -32,6 +32,11 @@ logger = get_logger(__name__)
 # v1 drives every agent through the Claude harness. Per-agent harness selection
 # (from ``Agent.harness``) is a later refinement; for now the strategy holds one.
 DEFAULT_HARNESS = "claude"
+
+# The pathspec glob matching per-cycle lock files (see ``Strategy.write_lock``).
+# The one spelling of the pattern — ``_commit_cycle`` excludes it from cycle
+# commits so runner state never enters the artefact's history.
+CYCLE_LOCK_GLOB = "cyc_*.lock"
 
 
 def missing_role_message(strategy: str, role: str) -> str:
@@ -97,12 +102,15 @@ class Strategy(ABC):
         sandbox: Sandbox,
         trace_sink: TraceSink | None = None,
         progress_sink: RunEventSink | None = None,
+        timeouts: Timeouts | None = None,
     ) -> None:
         self._state = {}
         # Held for future per-``Agent.harness`` selection, which will need to
         # build other harnesses with the same confinement policy.
         self.sandbox = sandbox
-        self.harness: Harness = get_harness(DEFAULT_HARNESS, sandbox)
+        # The wall-clock ceilings the runner passes down from config, so a wedged
+        # agent CLI can't stall the climb (see ``Timeouts`` / ``hillclimber.run``).
+        self.harness: Harness = get_harness(DEFAULT_HARNESS, sandbox, timeouts)
         # Where this strategy's agent traces land: the injected sink (the CLI's
         # live view, later) or the logging default. Strategies don't call this
         # directly — they wrap it per agent run via ``_make_trace_sink``.
@@ -225,8 +233,14 @@ class Strategy(ABC):
         the parent repo, outside the sandbox boundary), so the worker only edits
         and committing is the runner's job — this method runs outside the
         sandbox. The result is a clean commit: the score is read from it and the
-        next cycle forks from it. A cycle that produced no new commit at all (no
-        change applied) is logged but not an error.
+        next cycle forks from it.
+
+        The cycle's own ``cyc_*.lock`` is excluded from the commit — it is
+        runner state, promoted into ``hillclimber.lock`` on completion (see
+        ``hillclimber.lockfile``), and must not leak into descendant cycles
+        that fork from this branch. A cycle where the worker changed nothing
+        (only the lock is dirty) therefore produces no new commit; that is
+        logged but not an error.
 
         Args:
             worktree: The cycle's checkout the worker edited.
@@ -236,10 +250,8 @@ class Strategy(ABC):
         Returns:
             The sha of this cycle's resulting commit.
         """
-        if await is_dirty(worktree):
-            logger.info("cycle %d: committing the worker's edits", index)
-            await commit_all(worktree, f"hillclimber: cycle {index:03d}")
-        sha = await head_sha(worktree)
+        logger.info("cycle %d: committing the worker's edits", index)
+        sha = await commit_all(worktree, f"hillclimber: cycle {index:03d}", exclude=(CYCLE_LOCK_GLOB,))
         if sha == base_sha:
             logger.warning("cycle %d: worker produced no new commit (no change applied)", index)
         return sha

@@ -18,6 +18,7 @@ Per CLAUDE.md the subprocess is spawned with ``asyncio.create_subprocess_exec``
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 from collections.abc import Callable, Sequence
 
@@ -29,8 +30,34 @@ from sandboxes.base import Sandbox
 _STREAM_LIMIT = 16 * 1024 * 1024
 
 
+class AgentTimeout(RuntimeError):
+    """An agent subprocess overran its wall-clock ceiling and was killed.
+
+    Raised by :func:`exec_agent` / :func:`stream_exec_agent` when a child does
+    not finish within ``timeout`` seconds. The child is SIGKILL'd and reaped
+    before this propagates, so no orphan process is left behind (see the
+    ``timeout`` handling / ``Timeouts`` config).
+    """
+
+
+async def _terminate(proc: asyncio.subprocess.Process) -> None:
+    """Best-effort kill-and-reap of ``proc`` if it is still running.
+
+    The one teardown both exec paths funnel through: on a timeout, a cancelled
+    climb, or an exception raised out of the stream loop, the sandboxed child
+    must not be left orphaned. ``kill`` is a no-op once the child has already
+    exited; the reap is guarded so teardown never raises over the real error.
+    """
+    if proc.returncode is not None:
+        return
+    with contextlib.suppress(ProcessLookupError):
+        proc.kill()
+    with contextlib.suppress(Exception):
+        await proc.wait()
+
+
 async def exec_agent(
-    argv: list[str], cwd: str, sandbox: Sandbox, write_allow: Sequence[str] = ()
+    argv: list[str], cwd: str, sandbox: Sandbox, write_allow: Sequence[str] = (), timeout: float | None = None
 ) -> tuple[bytes, bytes, int]:
     """Run ``argv`` under ``sandbox``, confined to ``cwd``, and collect its output.
 
@@ -46,9 +73,14 @@ async def exec_agent(
         sandbox: The sandbox that wraps ``argv`` with its confinement policy.
         write_allow: The harness's runtime-state dirs the child may write beyond
             ``cwd`` (see ``Harness.write_allow``), handed to the sandbox policy.
+        timeout: Wall-clock ceiling in seconds; ``None`` waits indefinitely. On
+            overrun the child is killed and :class:`AgentTimeout` is raised.
 
     Returns:
         ``(stdout, stderr, returncode)`` from the finished child.
+
+    Raises:
+        AgentTimeout: If the child does not finish within ``timeout`` seconds.
     """
     real_cwd = os.path.realpath(cwd)
     wrapped = sandbox.wrap(argv, real_cwd, write_allow)
@@ -58,7 +90,15 @@ async def exec_agent(
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    stdout, stderr = await proc.communicate()
+    try:
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout)
+    except TimeoutError as exc:
+        raise AgentTimeout(f"agent process exceeded the {timeout}s timeout") from exc
+    finally:
+        # Covers the timeout, a cancelled climb, and any other early exit: the
+        # child is killed and reaped rather than orphaned. A clean exit already
+        # set ``returncode``, so this is a no-op there.
+        await _terminate(proc)
     # ``returncode`` is always set after ``communicate`` returns; coalesce only to
     # satisfy the ``int`` return type (it is never actually ``None`` here).
     return stdout, stderr, proc.returncode if proc.returncode is not None else -1
@@ -70,6 +110,7 @@ async def stream_exec_agent(
     sandbox: Sandbox,
     on_line: Callable[[bytes], None],
     write_allow: Sequence[str] = (),
+    timeout: float | None = None,
 ) -> tuple[bytes, int]:
     """Run ``argv`` under ``sandbox`` like :func:`exec_agent`, streaming stdout.
 
@@ -79,7 +120,8 @@ async def stream_exec_agent(
     surfaces an agent's progress live (see ``harnesses.base.TraceSink``).
 
     ``on_line`` must be cheap and non-blocking (it runs on the read loop) and
-    receives each non-blank line with its trailing newline still attached.
+    receives each non-blank line with its trailing newline still attached. If it
+    raises, the child is killed and reaped before the exception propagates.
 
     Args:
         argv: The child command to run (e.g. the full ``claude ...`` argv).
@@ -89,10 +131,15 @@ async def stream_exec_agent(
         on_line: Called with each non-blank stdout line as it arrives.
         write_allow: The harness's runtime-state dirs the child may write beyond
             ``cwd`` (see ``Harness.write_allow``), handed to the sandbox policy.
+        timeout: Wall-clock ceiling in seconds; ``None`` waits indefinitely. On
+            overrun the child is killed and :class:`AgentTimeout` is raised.
 
     Returns:
         ``(stderr, returncode)`` from the finished child; stdout was already
         delivered line by line.
+
+    Raises:
+        AgentTimeout: If the child does not finish within ``timeout`` seconds.
     """
     real_cwd = os.path.realpath(cwd)
     wrapped = sandbox.wrap(argv, real_cwd, write_allow)
@@ -113,8 +160,17 @@ async def stream_exec_agent(
             if line.strip():
                 on_line(line)
 
-    # Drain both pipes concurrently so a chatty stderr can never fill its pipe
-    # and stall the child while stdout is being read (or vice versa).
-    _, stderr = await asyncio.gather(drain_stdout(), stderr_reader.read())
-    returncode = await proc.wait()
-    return stderr, returncode
+    async def pump() -> tuple[bytes, int]:
+        # Drain both pipes concurrently so a chatty stderr can never fill its
+        # pipe and stall the child while stdout is being read (or vice versa).
+        _, stderr = await asyncio.gather(drain_stdout(), stderr_reader.read())
+        return stderr, await proc.wait()
+
+    try:
+        return await asyncio.wait_for(pump(), timeout)
+    except TimeoutError as exc:
+        raise AgentTimeout(f"agent process exceeded the {timeout}s timeout") from exc
+    finally:
+        # Timeout, cancellation, or an ``on_line`` sink that raised: kill and
+        # reap the child so a wedged/aborted run never leaks the sandboxed CLI.
+        await _terminate(proc)
