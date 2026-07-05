@@ -1,6 +1,5 @@
 # Python-generated files
 __pycache__/
-__pycache__/*.pyc
 *.py[oc]
 build/
 dist/
@@ -9,5 +8,8 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Run artefacts and tooling caches
 .hillclimber
 .gstack/
+.impeccable/

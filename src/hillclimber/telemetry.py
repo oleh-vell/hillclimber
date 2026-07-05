@@ -36,12 +36,12 @@ import importlib
 import logging
 import os
 
-# The project's top-level packages. ``configure_logging`` attaches handlers to
+# The project's top-level package(s). ``configure_logging`` attaches handlers to
 # exactly these, so hillclimber's own logs surface without capturing (or muting)
 # logs from third-party libraries a consumer may also be using. Public so a
 # consumer that temporarily re-routes the project's logs (the CLI's live
 # dashboard) targets the same set.
-PACKAGE_LOGGERS = ("hillclimber", "strategies", "harnesses")
+PACKAGE_LOGGERS = ("hillclimber",)
 
 # Marks handlers this module installed, so re-running ``configure_logging`` is
 # idempotent: it replaces its own handlers rather than stacking duplicates and
