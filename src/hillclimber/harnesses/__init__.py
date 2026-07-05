@@ -1,7 +1,7 @@
 """Pluggable agent harnesses.
 
 ``get_harness`` maps a harness name (as written in ``Agent.harness``) to a
-concrete :class:`Harness`, built with the OS :class:`~sandboxes.base.Sandbox`
+concrete :class:`Harness`, built with the OS :class:`~hillclimber.sandboxes.base.Sandbox`
 that confines its agent runs. v1 ships the Claude Code harness only; the registry
 is the seam for adding more (an API harness, etc.) later.
 """
@@ -11,9 +11,9 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
-from harnesses.base import Harness, HarnessError, TraceEvent, TraceSink
-from harnesses.claude import ClaudeHarness
-from sandboxes.base import Sandbox
+from hillclimber.harnesses.base import Harness, HarnessError, HarnessRun, TraceEvent, TraceSink
+from hillclimber.harnesses.claude import ClaudeHarness
+from hillclimber.sandboxes.base import Sandbox
 
 if TYPE_CHECKING:
     from hillclimber.models import Timeouts
@@ -68,4 +68,13 @@ def get_harness(name: str, sandbox: Sandbox, timeouts: Timeouts | None = None) -
     return resolve_harness(name)(sandbox, timeouts)
 
 
-__all__ = ["ClaudeHarness", "Harness", "HarnessError", "TraceEvent", "TraceSink", "get_harness", "resolve_harness"]
+__all__ = [
+    "ClaudeHarness",
+    "Harness",
+    "HarnessError",
+    "HarnessRun",
+    "TraceEvent",
+    "TraceSink",
+    "get_harness",
+    "resolve_harness",
+]

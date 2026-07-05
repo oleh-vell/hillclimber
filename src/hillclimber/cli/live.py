@@ -34,7 +34,7 @@ from rich.spinner import Spinner
 from rich.table import Table
 from rich.text import Text
 
-from harnesses import TraceEvent
+from hillclimber.harnesses import TraceEvent
 from hillclimber.progress import RunEvent
 from hillclimber.telemetry import PACKAGE_LOGGERS
 

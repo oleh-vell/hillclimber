@@ -20,11 +20,7 @@ from pathlib import Path
 
 import pytest
 
-# Import the package first so it fully initialises; importing src modules
-# (strategies.base, sandboxes, harnesses) directly otherwise hits a circular
-# import via hillclimber.run -> strategies.chain.
-import hillclimber  # noqa: F401
-from harnesses._proc import exec_agent, stream_exec_agent
+from hillclimber.harnesses._proc import exec_agent, stream_exec_agent
 from hillclimber.models import (
     DEFAULT_DENY_READ,
     Cycle,
@@ -33,9 +29,9 @@ from hillclimber.models import (
     Score,
     SeatbeltSandboxConfig,
 )
-from sandboxes import PassthroughSandbox, SeatbeltSandbox, get_sandbox
-from sandboxes.seatbelt import _render_profile, _sb_quote
-from strategies.base import Strategy
+from hillclimber.sandboxes import PassthroughSandbox, SeatbeltSandbox, get_sandbox
+from hillclimber.sandboxes.seatbelt import _render_profile, _sb_quote
+from hillclimber.strategies.base import Strategy
 
 # --------------------------------------------------------------------------- #
 # Strategy.new_experiment_id

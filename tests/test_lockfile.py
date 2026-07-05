@@ -13,7 +13,6 @@ from pathlib import Path
 
 import pytest
 
-import hillclimber  # noqa: F401  (initialise package before importing submodules)
 from hillclimber import lockfile
 from hillclimber.lockfile import (
     ExperimentLog,

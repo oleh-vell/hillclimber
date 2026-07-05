@@ -19,7 +19,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-# The stages a cycle moves through, in order (see ``strategies.chain``): the
+# The stages a cycle moves through, in order (see ``hillclimber.strategies.chain``): the
 # orchestrator agent proposes, the worker applies, the scorer measures.
 CycleStage = Literal["proposing", "applying", "scoring"]
 
@@ -60,7 +60,7 @@ RunEventSink = Callable[[RunEvent], None]
 def ignore_progress(event: RunEvent) -> None:
     """The default sink: drop the event.
 
-    Unlike traces (whose default sink logs, see ``strategies.base.log_trace``),
+    Unlike traces (whose default sink logs, see ``hillclimber.strategies.base.log_trace``),
     every run milestone already has an INFO log line at its emission site — a
     logging default here would just double-print them.
     """

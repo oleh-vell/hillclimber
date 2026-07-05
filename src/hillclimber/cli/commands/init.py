@@ -24,8 +24,8 @@ from hillclimber.cli.banner import print_banner
 from hillclimber.cli.console import console, err_console
 from hillclimber.config import HILLCLIMBER_TOML
 from hillclimber.models import DEFAULT_STRATEGY
-from strategies.base import DEFAULT_HARNESS
-from strategies.registry import get_strategy
+from hillclimber.strategies.base import DEFAULT_HARNESS
+from hillclimber.strategies.registry import get_strategy
 
 EVAL_PY = "eval.py"
 

@@ -20,12 +20,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import ClassVar
 
-from harnesses import Harness, TraceEvent, TraceSink, get_harness
 from hillclimber.git_utils import commit_all
+from hillclimber.harnesses import Harness, TraceEvent, TraceSink, get_harness
 from hillclimber.models import Agent, Config, Cycle, ExperimentStatus, Score, Timeouts
 from hillclimber.progress import RunEventSink, ignore_progress
+from hillclimber.sandboxes.base import Sandbox
 from hillclimber.telemetry import get_logger
-from sandboxes.base import Sandbox
 
 logger = get_logger(__name__)
 

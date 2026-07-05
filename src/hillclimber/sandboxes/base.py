@@ -3,14 +3,14 @@
 A *sandbox* confines an agent CLI to its run's worktree at the OS level: given a
 child argv and the per-run worktree, it returns a new argv that runs that child
 under an OS sandbox enforcing the filesystem (and network) policy. Harnesses
-shell out through a single chokepoint (``harnesses._proc.exec_agent``) that wraps
+shell out through a single chokepoint (``hillclimber.harnesses._proc.exec_agent``) that wraps
 every argv with the configured sandbox, so confinement can never be forgotten and
 is identical across harnesses.
 
 ``wrap`` is pure and **synchronous** — it only rewrites argv (the Seatbelt
 profile is passed inline via ``sandbox-exec -p``, so there is no file I/O and
-nothing to block the event loop). ``get_sandbox`` (see ``sandboxes.__init__``)
-maps a config to a concrete backend, mirroring ``harnesses.get_harness``.
+nothing to block the event loop). ``get_sandbox`` (see ``hillclimber.sandboxes.__init__``)
+maps a config to a concrete backend, mirroring ``hillclimber.harnesses.get_harness``.
 """
 
 from __future__ import annotations

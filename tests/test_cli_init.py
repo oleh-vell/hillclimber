@@ -23,8 +23,8 @@ from hillclimber.cli.commands import init as init_cmd
 from hillclimber.config import HILLCLIMBER_TOML, load_config
 from hillclimber.models import CommandScorer
 from hillclimber.scoring import score_artefact
-from strategies.chain import Chain
-from strategies.registry import verify_agents
+from hillclimber.strategies.chain import Chain
+from hillclimber.strategies.registry import verify_agents
 
 runner = CliRunner()
 

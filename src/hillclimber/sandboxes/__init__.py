@@ -4,16 +4,16 @@
 ``hillclimber.models``) to a concrete :class:`Sandbox`. v1 ships the macOS
 Seatbelt backend plus a passthrough (``none``) opt-out; the registry is the seam
 for adding more (bubblewrap, docker, ...) later, mirroring
-``harnesses.get_harness``.
+``hillclimber.harnesses.get_harness``.
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from sandboxes.base import Sandbox
-from sandboxes.passthrough import PassthroughSandbox
-from sandboxes.seatbelt import SeatbeltSandbox
+from hillclimber.sandboxes.base import Sandbox
+from hillclimber.sandboxes.passthrough import PassthroughSandbox
+from hillclimber.sandboxes.seatbelt import SeatbeltSandbox
 
 if TYPE_CHECKING:
     from hillclimber.models import SandboxConfig
@@ -33,15 +33,11 @@ def get_sandbox(config: SandboxConfig) -> Sandbox:
         ValueError: If ``config`` is an unknown sandbox kind.
         RuntimeError: If a Seatbelt sandbox is built on a non-macOS platform.
     """
-    # Imported here, not at module level: the config variants live in
-    # ``hillclimber.models``, and importing them at import time closes a cycle
-    # (harnesses -> sandboxes -> hillclimber -> hillclimber.run -> sandboxes)
-    # that breaks whichever package is imported first.
-    from hillclimber.models import PassthroughSandboxConfig, SeatbeltSandboxConfig
-
-    if isinstance(config, SeatbeltSandboxConfig):
+    # Dispatch on the ``kind`` discriminator (not isinstance) so the config
+    # classes are only needed as annotations — no runtime import of the models.
+    if config.kind == "seatbelt":
         return SeatbeltSandbox(deny_read=config.deny_read, network=config.network)
-    if isinstance(config, PassthroughSandboxConfig):
+    if config.kind == "none":
         return PassthroughSandbox()
     raise ValueError(f"unknown sandbox kind: {config.kind!r}")
 

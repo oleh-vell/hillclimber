@@ -27,7 +27,7 @@ from hillclimber.cli.console import console, err_console
 from hillclimber.cli.state import CLIState
 from hillclimber.config import load_config
 from hillclimber.scoring import ScorerError, parse_eval, run_scorer_command
-from strategies.registry import get_strategy, verify_agents
+from hillclimber.strategies.registry import get_strategy, verify_agents
 
 # How much of the scorer's output to show when diagnosing a failure — enough to
 # see the traceback or the stray print, without flooding the terminal.

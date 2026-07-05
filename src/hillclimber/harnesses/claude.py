@@ -2,24 +2,24 @@
 
 Drives the ``claude`` CLI in headless (``--print``) mode: it runs an agent
 against a checkout and hands back the agent's final assistant message. This is
-the concrete fill for the harness seam in ``strategies.chain`` (``_propose_``/
+the concrete fill for the harness seam in ``hillclimber.strategies.chain`` (``_propose_``/
 ``_apply_hypothesis``), which needs to turn a system prompt + a task into an
 agent's reply.
 
 Runs use ``--output-format stream-json``, so the CLI narrates itself as NDJSON
 events while the agent works. Each line is normalized into the shared
-:class:`~harnesses.base.TraceEvent` vocabulary and pushed into the caller's
-:data:`~harnesses.base.TraceSink` as it arrives — that is how a consumer watches
+:class:`~hillclimber.harnesses.base.TraceEvent` vocabulary and pushed into the caller's
+:data:`~hillclimber.harnesses.base.TraceSink` as it arrives — that is how a consumer watches
 the agent think and open files live — and the final reply is read from the
 stream's terminal ``result`` event.
 
-Per CLAUDE.md the CLI is shelled out to (via the ``harnesses._proc.exec_agent``
+Per CLAUDE.md the CLI is shelled out to (via the ``hillclimber.harnesses._proc.exec_agent``
 chokepoint, never ``subprocess.run``) so it never blocks the event loop. Runs are
 always ``--dangerously-skip-permissions``: that removes permission *prompts*
 (which would deadlock a non-interactive run) but provides no filesystem boundary.
 The per-cycle worktree isolates *git state*, not the *filesystem* — an agent can
 still read and write anywhere on the machine. The real boundary is the OS
-:class:`~sandboxes.base.Sandbox` the harness holds: ``exec_agent`` wraps every
+:class:`~hillclimber.sandboxes.base.Sandbox` the harness holds: ``exec_agent`` wraps every
 invocation so the CLI is confined to its worktree.
 """
 
@@ -33,13 +33,11 @@ import tempfile
 from collections.abc import Sequence
 from typing import Any
 
-from pydantic import BaseModel
-
-from harnesses._proc import AgentTimeout, exec_agent, stream_exec_agent
-from harnesses.base import Harness, HarnessError, TraceEvent, TraceSink
+from hillclimber.harnesses._proc import AgentTimeout, exec_agent, stream_exec_agent
+from hillclimber.harnesses.base import Harness, HarnessError, HarnessRun, TraceEvent, TraceSink
 from hillclimber.models import Timeouts
+from hillclimber.sandboxes.base import Sandbox
 from hillclimber.telemetry import get_logger
-from sandboxes.base import Sandbox
 
 logger = get_logger(__name__)
 
@@ -68,20 +66,6 @@ _CLAUDE_WRITE_ALLOW = (
     "~/.claude/session-env",
     "~/.claude/shell-snapshots",
 )
-
-
-class HarnessRun(BaseModel):
-    """One headless invocation of the ``claude`` CLI.
-
-    ``system_prompt`` (the role's "SP") and ``prompt`` (the task) are the two
-    halves of what the agent is asked; ``path`` is the checkout it runs in (a
-    run's worktree).
-    """
-
-    system_prompt: str  # the agent's system prompt (SP)
-    path: str  # working directory the agent runs in (a worktree/checkout)
-    prompt: str  # the task/message to send the agent
-    model: str | None = None  # model alias or full id; None -> CLI default
 
 
 def _env_note(path: str) -> str:

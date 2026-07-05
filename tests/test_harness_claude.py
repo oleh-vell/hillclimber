@@ -5,16 +5,15 @@ from collections.abc import Sequence
 
 import pytest
 
-import harnesses.claude as claude_mod
+import hillclimber.harnesses.claude as claude_mod
 
 # Import the package first so it fully initialises (mirrors test_strategy_base).
-import hillclimber  # noqa: F401
-from harnesses import ClaudeHarness, Harness, TraceEvent, get_harness
-from harnesses._proc import AgentTimeout, exec_agent
-from harnesses.base import HarnessError
-from harnesses.claude import HarnessRun, _build_command, _build_verify_command, _parse_trace_line, run
+from hillclimber.harnesses import ClaudeHarness, Harness, HarnessRun, TraceEvent, get_harness
+from hillclimber.harnesses._proc import AgentTimeout, exec_agent
+from hillclimber.harnesses.base import HarnessError
+from hillclimber.harnesses.claude import _build_command, _build_verify_command, _parse_trace_line, run
 from hillclimber.models import Agent
-from sandboxes import PassthroughSandbox
+from hillclimber.sandboxes import PassthroughSandbox
 
 
 def test_build_command_includes_required_flags():

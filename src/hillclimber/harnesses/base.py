@@ -4,10 +4,10 @@ A *harness* runs an agent: given a system prompt and a task in a working
 directory, it drives some backend (the ``claude`` CLI, an API, ...) and hands
 back the agent's final reply. Strategies hold a pluggable ``self.harness`` (see
 ``Strategy.__init__``) so the loop stays agnostic to which backend runs the
-agent; ``get_harness`` (see ``harnesses.__init__``) maps a name to a concrete one.
+agent; ``get_harness`` (see ``hillclimber.harnesses.__init__``) maps a name to a concrete one.
 
-``HarnessRun`` (defined alongside the Claude harness) is the call payload shared
-by every harness; concrete harnesses implement :meth:`Harness.run`. While an
+:class:`HarnessRun` is the call payload shared by every harness; concrete
+harnesses implement :meth:`Harness.run`. While an
 agent runs, the harness narrates its progress as :class:`TraceEvent`\\ s pushed
 into an optional :data:`TraceSink` — the shared vocabulary that lets one
 consumer (a logger today, the CLI's live view later) render any backend's run.
@@ -23,8 +23,21 @@ from typing import TYPE_CHECKING, Any, Literal
 from pydantic import BaseModel
 
 if TYPE_CHECKING:
-    from harnesses.claude import HarnessRun
     from hillclimber.models import Agent
+
+
+class HarnessRun(BaseModel):
+    """One agent invocation, harness-agnostic.
+
+    ``system_prompt`` (the role's "SP") and ``prompt`` (the task) are the two
+    halves of what the agent is asked; ``path`` is the checkout it runs in (a
+    run's worktree).
+    """
+
+    system_prompt: str  # the agent's system prompt (SP)
+    path: str  # working directory the agent runs in (a worktree/checkout)
+    prompt: str  # the task/message to send the agent
+    model: str | None = None  # model alias or full id; None -> backend default
 
 
 class TraceEvent(BaseModel):
@@ -32,7 +45,7 @@ class TraceEvent(BaseModel):
 
     Every harness translates its backend-specific stream into this small shared
     vocabulary, so a consumer written once (the logging sink in
-    ``strategies.base``, the CLI's live view later) renders any backend's run.
+    ``hillclimber.strategies.base``, the CLI's live view later) renders any backend's run.
     The ``kind``s are deliberately few — what a reader of the run needs to see:
 
     - ``init``: the session started (model, tools).
@@ -74,7 +87,7 @@ class Harness(ABC):
     # writable *outside* the worktree — per-session runtime state its CLI keeps
     # in the home dir, without which the agent's tools break under a sandbox
     # that denies writes (see ``Sandbox.wrap``). Each concrete harness declares
-    # its own; the chokepoint (``harnesses._proc``) hands them to the sandbox on
+    # its own; the chokepoint (``hillclimber.harnesses._proc``) hands them to the sandbox on
     # every invocation. Keep the list minimal and *state-only*: never include a
     # path that configures behavior (settings, hooks) — an agent that can write
     # those can escape the sandbox on the user's next interactive session.

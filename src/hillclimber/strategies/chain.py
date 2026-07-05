@@ -11,15 +11,15 @@ from __future__ import annotations
 
 import contextlib
 
-from harnesses.claude import HarnessRun
 from hillclimber.git_utils import check_or_init_git, create_worktree, head_sha, remove_worktree_if_present
+from hillclimber.harnesses.base import HarnessRun
 from hillclimber.lockfile import ExperimentLog, lock_path
 from hillclimber.models import Config, Cycle, CycleStatus, CycleSummary, ExperimentStatus, Score
 from hillclimber.progress import RunEvent
 from hillclimber.scoring import score_artefact
+from hillclimber.strategies import prompt
+from hillclimber.strategies.base import CycleRecord, RoleSpec, Strategy
 from hillclimber.telemetry import get_logger
-from strategies import prompt
-from strategies.base import CycleRecord, RoleSpec, Strategy
 
 logger = get_logger(__name__)
 

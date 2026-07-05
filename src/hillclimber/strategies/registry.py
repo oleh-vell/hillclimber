@@ -8,10 +8,10 @@ itself to ``STRATEGIES``.
 
 from __future__ import annotations
 
-from harnesses import resolve_harness
+from hillclimber.harnesses import resolve_harness
 from hillclimber.models import Config
-from strategies.base import Strategy, missing_role_message
-from strategies.chain import Chain
+from hillclimber.strategies.base import Strategy, missing_role_message
+from hillclimber.strategies.chain import Chain
 
 STRATEGIES: dict[str, type[Strategy]] = {"chain": Chain}
 

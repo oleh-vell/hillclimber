@@ -12,10 +12,10 @@ import json
 
 from typer.testing import CliRunner
 
-from harnesses import TraceEvent
 from hillclimber.cli.app import app
 from hillclimber.cli.banner import RUN_PHRASES, run_phrase
 from hillclimber.cli.commands import run as run_cmd
+from hillclimber.harnesses import TraceEvent
 from hillclimber.models import CycleStatus, CycleSummary, ExperimentStatus, Score
 from hillclimber.scoring import ScorerError
 

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from sandboxes.base import Sandbox
+from hillclimber.sandboxes.base import Sandbox
 
 
 class PassthroughSandbox(Sandbox):

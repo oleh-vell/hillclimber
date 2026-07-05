@@ -13,9 +13,7 @@ from pathlib import Path
 
 import pytest
 
-import hillclimber  # noqa: F401  (initialise package before importing strategies)
-from harnesses import ClaudeHarness, Harness, TraceEvent, TraceSink
-from harnesses.claude import HarnessRun
+from hillclimber.harnesses import ClaudeHarness, Harness, HarnessRun, TraceEvent, TraceSink
 from hillclimber.lockfile import lock_path, read_events
 from hillclimber.models import (
     Budget,
@@ -29,9 +27,9 @@ from hillclimber.models import (
     Score,
 )
 from hillclimber.progress import RunEvent, RunEventSink
-from sandboxes import PassthroughSandbox
-from strategies.base import CycleRecord
-from strategies.chain import Chain
+from hillclimber.sandboxes import PassthroughSandbox
+from hillclimber.strategies.base import CycleRecord
+from hillclimber.strategies.chain import Chain
 
 
 class _RecordingHarness(Harness):
@@ -191,7 +189,7 @@ def test_default_trace_sink_logs_events(caplog):
     chain = Chain(PassthroughSandbox())
     chain.harness = _TracingHarness()
 
-    with caplog.at_level(logging.INFO, logger="strategies.base"):
+    with caplog.at_level(logging.INFO, logger="hillclimber.strategies.base"):
         asyncio.run(chain._propose_hypothesis(_config(), "hc_a1b2_cycle_001", index=1))
 
     # With no sink injected, traces surface as ordinary log lines.
@@ -557,7 +555,7 @@ def test_one_cycle_tolerates_a_noop_worker(tmp_path: Path, caplog: pytest.LogCap
     chain = Chain(PassthroughSandbox())
     chain.harness = _RecordingHarness()  # edits nothing — only the lock is dirty
 
-    with caplog.at_level(logging.WARNING, logger="strategies.base"):
+    with caplog.at_level(logging.WARNING, logger="hillclimber.strategies.base"):
         cycle = _one_cycle(chain, tmp_path)
 
     # Exclusion left nothing to commit: no crash, and the fork point is kept as

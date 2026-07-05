@@ -32,7 +32,6 @@ from typing import Annotated
 import typer
 from rich.markup import escape
 
-from harnesses import HarnessError, TraceEvent, TraceSink
 from hillclimber.cli import render
 from hillclimber.cli.banner import run_phrase
 from hillclimber.cli.console import can_prompt, console, err_console
@@ -40,11 +39,12 @@ from hillclimber.cli.live import RunDashboard
 from hillclimber.cli.state import CLIState
 from hillclimber.cli.tracelog import TraceLog, trace_path
 from hillclimber.config import load_config
+from hillclimber.harnesses import HarnessError, TraceEvent, TraceSink
 from hillclimber.lockfile import lock_path, reset_history
 from hillclimber.models import Config, ExperimentStatus
 from hillclimber.run import run as run_experiment
 from hillclimber.scoring import ScorerError
-from strategies.base import log_trace
+from hillclimber.strategies.base import log_trace
 
 
 def _load_config(target: Path) -> Config | None:

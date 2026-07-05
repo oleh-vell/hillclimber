@@ -5,8 +5,8 @@ from pathlib import Path
 import pytest
 
 import hillclimber
-from harnesses import ClaudeHarness
 from hillclimber import Config, RunEvent, ScorerError, get_baseline_score
+from hillclimber.harnesses import ClaudeHarness
 from hillclimber.models import Agent, Budget, CommandScorer
 
 PROJECT_FOLDERS = Path(__file__).parent / "example_project_folders"

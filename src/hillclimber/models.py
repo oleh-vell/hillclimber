@@ -57,7 +57,7 @@ class Agent(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    harness: str  # e.g. "claude" (alias: "claude code"); resolved by harnesses.get_harness
+    harness: str  # e.g. "claude" (alias: "claude code"); resolved by hillclimber.harnesses.get_harness
     model: str
     system_prompt: str | None = None  # None -> the strategy's role default
 
@@ -270,7 +270,7 @@ class Config(BaseModel):
     # The OS sandbox that confines every agent CLI to its run's worktree. A
     # ``hillclimber.toml`` with no ``[sandbox]`` table gets the Seatbelt default.
     sandbox: SandboxConfig = Field(default_factory=SeatbeltSandboxConfig)
-    # Which strategy runs the climb; resolved and validated by strategies.registry.
+    # Which strategy runs the climb; resolved and validated by hillclimber.strategies.registry.
     strategy: str = DEFAULT_STRATEGY
     goal: Goal = Field(default_factory=Goal)  # what the climb optimizes toward
     budget: Budget  # hard stop condition (v1: cycles only)
@@ -278,7 +278,7 @@ class Config(BaseModel):
     # CLI or a hung eval can never stall the run forever (see ``Timeouts``).
     timeout: Timeouts = Field(default_factory=Timeouts)
     # One ``[agents.<role>]`` table per role. Which roles are required is the
-    # strategy's declaration, checked by ``strategies.registry.verify_agents``.
+    # strategy's declaration, checked by ``hillclimber.strategies.registry.verify_agents``.
     agents: dict[str, Agent] = Field(default_factory=dict)
 
     @model_validator(mode="before")

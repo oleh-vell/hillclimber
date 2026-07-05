@@ -13,7 +13,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from harnesses import TraceSink
 from hillclimber.config import load_config
 from hillclimber.git_utils import (
     check_or_init_git,
@@ -22,9 +21,12 @@ from hillclimber.git_utils import (
     create_snapshot_commit,
     remove_worktree_if_present,
 )
+from hillclimber.harnesses import TraceSink
 from hillclimber.models import Config, ExperimentStatus, Score
 from hillclimber.progress import RunEvent, RunEventSink, ignore_progress
+from hillclimber.sandboxes import get_sandbox
 from hillclimber.scoring import score_artefact
+from hillclimber.strategies.registry import get_strategy, verify_agents
 from hillclimber.telemetry import get_logger
 
 logger = get_logger(__name__)
@@ -44,13 +46,13 @@ async def run(
     Parses the config from ``path`` (a directory holding a ``hillclimber.toml``,
     or the file itself), preflights the configured models, scores the baseline
     once, then hands off to the configured strategy, which drives the cycle
-    loop to completion (see ``strategies.chain``).
+    loop to completion (see ``hillclimber.strategies.chain``).
 
     Args:
         path: The experiment directory (or its ``hillclimber.toml``).
         trace_sink: Where labelled agent trace events land as cycles run (the
             CLI's live view). ``None`` falls back to the logging sink (see
-            ``strategies.base.log_trace``), so the run still narrates itself
+            ``hillclimber.strategies.base.log_trace``), so the run still narrates itself
             through ordinary logs.
         progress_sink: Where run-level milestones land — baseline, preflight,
             cycle lifecycle (see ``hillclimber.progress``). ``None`` drops them;
@@ -59,13 +61,6 @@ async def run(
     Returns:
         The final ``ExperimentStatus`` produced by the strategy.
     """
-    # Imported here, not at module level: ``hillclimber.__init__`` imports this
-    # module eagerly, and the strategy/sandbox registries import back into
-    # ``harnesses``/``hillclimber.models`` — a top-level import here closes a
-    # cycle that breaks whichever package happens to be imported first.
-    from sandboxes import get_sandbox
-    from strategies.registry import get_strategy, verify_agents
-
     emit = progress_sink if progress_sink is not None else ignore_progress
     logger.info("loading experiment from %s", path)
     config = load_config(path)

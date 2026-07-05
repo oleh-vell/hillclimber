@@ -15,8 +15,8 @@ from io import StringIO
 
 from rich.console import Console
 
-from harnesses import TraceEvent
 from hillclimber.cli.live import RunDashboard, _format_elapsed
+from hillclimber.harnesses import TraceEvent
 from hillclimber.progress import RunEvent
 
 

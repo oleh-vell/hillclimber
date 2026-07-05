@@ -5,8 +5,7 @@ from pathlib import Path
 import pytest
 
 # Import the package first so it fully initialises; importing a submodule
-# directly otherwise hits a circular import via hillclimber.run -> strategies.chain.
-import hillclimber  # noqa: F401
+# directly otherwise hits a circular import via hillclimber.run -> hillclimber.strategies.chain.
 from hillclimber import git_utils
 
 

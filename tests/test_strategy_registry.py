@@ -16,12 +16,12 @@ from pathlib import Path
 import pytest
 
 import hillclimber
-from harnesses import ClaudeHarness
+from hillclimber.harnesses import ClaudeHarness
 from hillclimber.models import Config, ExperimentStatus, Score
 from hillclimber.progress import RunEvent
-from strategies.base import Strategy
-from strategies.chain import Chain
-from strategies.registry import STRATEGIES, get_strategy, verify_agents
+from hillclimber.strategies.base import Strategy
+from hillclimber.strategies.chain import Chain
+from hillclimber.strategies.registry import STRATEGIES, get_strategy, verify_agents
 
 
 def _config(roles: list[str]) -> Config:
@@ -195,7 +195,7 @@ def test_run_warns_but_continues_on_an_unused_role(tmp_path: Path, monkeypatch, 
 
 
 def _chain() -> Chain:
-    from sandboxes import PassthroughSandbox
+    from hillclimber.sandboxes import PassthroughSandbox
 
     return Chain(PassthroughSandbox())
 

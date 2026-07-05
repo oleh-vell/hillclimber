@@ -1,7 +1,7 @@
 """The single chokepoint every harness shells out through.
 
 Funnelling all agent subprocesses through ``exec_agent`` / ``stream_exec_agent``
-means OS confinement (the :class:`~sandboxes.base.Sandbox`) is applied in
+means OS confinement (the :class:`~hillclimber.sandboxes.base.Sandbox`) is applied in
 exactly one place — it can't be forgotten by a harness and is identical across
 them. The child runs with its ``cwd`` set to the (realpath'd) worktree; the
 sandbox wraps the argv with the policy that confines it there.
@@ -9,7 +9,7 @@ sandbox wraps the argv with the policy that confines it there.
 Two flavours share that guarantee: ``exec_agent`` buffers the child's output
 until it exits (probes, one-shot calls), ``stream_exec_agent`` hands stdout to
 the caller line by line as the child produces it (agent runs that narrate
-themselves, see ``harnesses.base.TraceSink``).
+themselves, see ``hillclimber.harnesses.base.TraceSink``).
 
 Per CLAUDE.md the subprocess is spawned with ``asyncio.create_subprocess_exec``
 (never ``subprocess.run``) so it never blocks the event loop.
@@ -22,7 +22,7 @@ import contextlib
 import os
 from collections.abc import Callable, Sequence
 
-from sandboxes.base import Sandbox
+from hillclimber.sandboxes.base import Sandbox
 
 # Per-line buffer limit for streaming reads. asyncio's default (64 KiB) is far
 # too small for stream-JSON lines that embed large tool results — an oversized
@@ -117,7 +117,7 @@ async def stream_exec_agent(
     The streaming sibling of :func:`exec_agent` — same realpath'd ``cwd``, same
     sandbox wrapping — but stdout is handed to ``on_line`` one line at a time as
     the child produces it, instead of buffered until exit. This is how a harness
-    surfaces an agent's progress live (see ``harnesses.base.TraceSink``).
+    surfaces an agent's progress live (see ``hillclimber.harnesses.base.TraceSink``).
 
     ``on_line`` must be cheap and non-blocking (it runs on the read loop) and
     receives each non-blank line with its trailing newline still attached. If it

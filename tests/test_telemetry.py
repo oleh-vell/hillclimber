@@ -4,7 +4,6 @@ import logging
 import pytest
 
 # Import the package first so it initialises cleanly (see test_git_utils).
-import hillclimber  # noqa: F401
 from hillclimber import telemetry
 
 

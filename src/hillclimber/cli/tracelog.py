@@ -2,13 +2,13 @@
 
 The live dashboard's trace tail is a glance — a few repainting lines that can
 never be reliably selected or copied. The complete record lands here instead:
-one plain-text line per :class:`~harnesses.TraceEvent`, full width, written to
+one plain-text line per :class:`~hillclimber.harnesses.TraceEvent`, full width, written to
 ``<artefact repo root>/.hillclimber/trace.log`` and truncated at the start of
 each run. ``run`` announces the path so "what did the agent actually do?" is a
 ``less``/``grep`` away, during the run or after it.
 
 The sink (:meth:`TraceLog.on_trace`) stays synchronous, as every trace sink must
-(see ``harnesses.TraceSink``), but it must not do disk I/O on the stream-reading
+(see ``hillclimber.harnesses.TraceSink``), but it must not do disk I/O on the stream-reading
 loop: a per-line flush there would block the event loop on every agent step. So
 the sink only formats the line and hands it to a background writer *thread* via a
 queue; the thread owns the file and does the writing and flushing, decoupled from
@@ -26,8 +26,8 @@ from pathlib import Path
 from types import TracebackType
 from typing import IO
 
-from harnesses import TraceEvent
 from hillclimber.git_utils import repo_root
+from hillclimber.harnesses import TraceEvent
 from hillclimber.telemetry import get_logger
 
 logger = get_logger(__name__)

@@ -40,7 +40,7 @@ import os
 import sys
 from collections.abc import Sequence
 
-from sandboxes.base import Sandbox
+from hillclimber.sandboxes.base import Sandbox
 
 
 def _sb_quote(path: str) -> str:
