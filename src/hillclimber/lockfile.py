@@ -135,8 +135,8 @@ def fold_statuses(events: Sequence[LockEvent]) -> dict[str, ExperimentStatus]:
     (delta vs the experiment's baseline, best-so-far recomputed), and
     ``experiment_finished`` settles the state to its outcome. An experiment
     with no terminal event stays ``"running"`` — live or interrupted, the log
-    cannot tell. ``in_progress`` stays empty: the log only ever sees settled
-    cycles; a running cycle's record is its ``cyc_<NNN>.lock``.
+    cannot tell. The log only ever sees settled cycles; a running cycle's
+    record is its ``cyc_<NNN>.lock``.
 
     A cycle or finish for an unknown experiment id is skipped with a warning —
     the read path stays lenient so one stray line cannot hide the rest of the

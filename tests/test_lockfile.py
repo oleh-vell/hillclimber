@@ -200,7 +200,6 @@ def test_fold_running_experiment(tmp_path: Path):
     assert status.experiment_id == "exp_a1b2c3d4"
     assert status.completed == 2
     assert status.total == 3
-    assert status.in_progress == []
     assert status.best is not None
     assert status.best.cycle_id == "cyc_002"
     # Delta is measured against the experiment's baseline, not the parent.

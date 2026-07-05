@@ -59,12 +59,3 @@ WORKER_AGENT = (
     "not run the tests or the eval, and do not commit; the runner commits your "
     "edits after you finish." + _SANDBOX_NOTE
 )
-
-# Reflects on the score delta and steers the next hypothesis. No strategy
-# declares a reflector role yet (the chain's reflect step is not wired in);
-# the prompt is kept for when it lands.
-REFLECTOR_AGENT = (
-    "You reflect on the result of a cycle. Given the score delta and the eval "
-    "details, explain what helped or hurt and propose the next hypothesis to "
-    "try. Be concrete about why the change moved the score the way it did." + _SANDBOX_NOTE
-)

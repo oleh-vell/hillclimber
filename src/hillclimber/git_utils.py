@@ -181,7 +181,8 @@ async def create_detached_worktree(path: str, name: str, ref: str) -> str:
 
     Unlike :func:`create_worktree`, this mints no branch — it is for reading a
     committed state (e.g. scoring the baseline at the start ref) rather than
-    building on it. Pair it with :func:`remove_worktree` to clean up once scored.
+    building on it. Pair it with :func:`remove_worktree_if_present` to clean up
+    once scored.
 
     Args:
         path: A directory or file inside the artefact repo; its root is used.
@@ -202,28 +203,6 @@ async def create_detached_worktree(path: str, name: str, ref: str) -> str:
     if rc != 0:
         raise RuntimeError(f"git worktree add failed in {repo}: {stderr}")
     return str(worktree)
-
-
-async def remove_worktree(path: str, name: str) -> None:
-    """Remove the worktree ``name`` under the repo's ``.hillclimber`` directory.
-
-    The counterpart to :func:`create_detached_worktree`. ``--force`` is used so a
-    scored (and thus possibly dirtied) checkout is torn down rather than left to
-    litter ``.hillclimber``.
-
-    Args:
-        path: A directory or file inside the artefact repo; its root is used.
-        name: The worktree directory name to remove.
-
-    Raises:
-        FileNotFoundError: If ``path`` does not exist.
-        RuntimeError: If ``git worktree remove`` fails.
-    """
-    repo = repo_root(path)
-    worktree = repo / ".hillclimber" / name
-    rc, stderr = await _git(repo, "worktree", "remove", "--force", str(worktree))
-    if rc != 0:
-        raise RuntimeError(f"git worktree remove failed in {repo}: {stderr}")
 
 
 async def prune_worktrees(path: str) -> None:
@@ -263,24 +242,6 @@ async def head_sha(worktree: str) -> str:
     if rc != 0:
         raise RuntimeError(f"git rev-parse HEAD failed in {worktree}: {stderr}")
     return stdout
-
-
-async def is_dirty(worktree: str) -> bool:
-    """Whether ``worktree`` has uncommitted changes (staged, unstaged, or untracked).
-
-    Args:
-        worktree: The checkout to inspect.
-
-    Returns:
-        ``True`` if ``git status --porcelain`` reports anything, else ``False``.
-
-    Raises:
-        RuntimeError: If ``git status`` fails.
-    """
-    rc, stdout, stderr = await _git_capture(Path(worktree), "status", "--porcelain")
-    if rc != 0:
-        raise RuntimeError(f"git status failed in {worktree}: {stderr}")
-    return bool(stdout)
 
 
 async def commit_all(worktree: str, message: str, exclude: Sequence[str] = ()) -> str:
@@ -399,11 +360,11 @@ async def create_snapshot_commit(path: str, message: str) -> str:
 async def remove_worktree_if_present(path: str, name: str) -> None:
     """Best-effort teardown of the worktree ``name`` — never raises.
 
-    Unlike :func:`remove_worktree`, this is for cleanup paths that must not mask
-    a real error (a cycle's ``finally``, a stale ``hc_baseline`` from a killed
-    run): it force-removes the checkout, deletes any leftover directory git's own
-    remove could not, and prunes the now-dangling registration so the same path
-    is immediately reusable. Failures are logged, not raised.
+    Built for cleanup paths that must not mask a real error (a cycle's
+    ``finally``, a stale ``hc_baseline`` from a killed run): it force-removes
+    the checkout, deletes any leftover directory git's own remove could not,
+    and prunes the now-dangling registration so the same path is immediately
+    reusable. Failures are logged, not raised.
 
     Args:
         path: A directory or file inside the artefact repo; its root is used.

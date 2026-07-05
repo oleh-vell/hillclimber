@@ -29,7 +29,6 @@ def _status() -> ExperimentStatus:
         status=CycleStatus.scored,
         hypothesis="use a regex instead of str.split()",
         score_after=Score(value=0.5, passed=True, scorer_id="command"),
-        accepted=False,
         delta=0.05,
     )
     return ExperimentStatus(

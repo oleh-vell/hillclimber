@@ -173,18 +173,8 @@ def test_detached_worktree_raises_for_unknown_ref(tmp_path: Path):
         asyncio.run(git_utils.create_detached_worktree(str(tmp_path), "hc_baseline", "no-such-branch"))
 
 
-def test_remove_worktree_tears_down_the_checkout(tmp_path: Path):
-    _repo_with_one_commit(tmp_path)
-    worktree = asyncio.run(git_utils.create_detached_worktree(str(tmp_path), "hc_baseline", "HEAD"))
-    assert Path(worktree).is_dir()
-
-    asyncio.run(git_utils.remove_worktree(str(tmp_path), "hc_baseline"))
-
-    assert not Path(worktree).exists()
-
-
 # --------------------------------------------------------------------------- #
-# head_sha / is_dirty / commit_all
+# head_sha / commit_all
 # --------------------------------------------------------------------------- #
 
 
@@ -193,17 +183,14 @@ def _rev_parse(path: Path) -> str:
     return out.stdout.strip()
 
 
+def _porcelain(path: Path) -> str:
+    out = subprocess.run(["git", "status", "--porcelain"], cwd=path, capture_output=True, text=True, check=True)
+    return out.stdout.strip()
+
+
 def test_head_sha_matches_rev_parse(tmp_path: Path):
     _repo_with_one_commit(tmp_path)
     assert asyncio.run(git_utils.head_sha(str(tmp_path))) == _rev_parse(tmp_path)
-
-
-def test_is_dirty_reflects_uncommitted_changes(tmp_path: Path):
-    _repo_with_one_commit(tmp_path)
-    assert asyncio.run(git_utils.is_dirty(str(tmp_path))) is False
-
-    (tmp_path / "a.txt").write_text("changed\n")
-    assert asyncio.run(git_utils.is_dirty(str(tmp_path))) is True
 
 
 def test_commit_all_commits_everything_and_returns_new_sha(tmp_path: Path):
@@ -215,7 +202,7 @@ def test_commit_all_commits_everything_and_returns_new_sha(tmp_path: Path):
 
     assert sha != before
     assert sha == _rev_parse(tmp_path)
-    assert asyncio.run(git_utils.is_dirty(str(tmp_path))) is False
+    assert _porcelain(tmp_path) == ""
 
 
 def _tracked_files(path: Path) -> set[str]:
@@ -320,7 +307,7 @@ def test_create_snapshot_commit_captures_dirty_tree_non_destructively(tmp_path: 
     assert _rev_parse(tmp_path) == head_before
     assert (tmp_path / "a.txt").read_text() == "changed\n"
     assert (tmp_path / "new.txt").read_text() == "new\n"
-    assert asyncio.run(git_utils.is_dirty(str(tmp_path))) is True
+    assert _porcelain(tmp_path) != ""
     # The snapshot's tree carries both the tracked edit and the untracked file...
     tracked = _tracked_at(tmp_path, sha)
     assert {"a.txt", "new.txt"} <= tracked

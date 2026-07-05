@@ -112,8 +112,8 @@ def test_propose_hypothesis_feeds_past_attempts_into_the_prompt():
     chain.harness = fake
     # Seed the memory the way one_cycle does: two prior hypotheses, one that
     # helped and one that hurt.
-    chain._cycle_records().append(CycleRecord(hypothesis="add caching", before=0.50, after=0.60))
-    chain._cycle_records().append(CycleRecord(hypothesis="drop validation", before=0.60, after=0.55))
+    chain._cycle_records.append(CycleRecord(hypothesis="add caching", before=0.50, after=0.60))
+    chain._cycle_records.append(CycleRecord(hypothesis="drop validation", before=0.60, after=0.55))
 
     asyncio.run(chain._propose_hypothesis(_config(), "hc_a1b2_cycle_001", index=1))
 

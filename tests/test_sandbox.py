@@ -2,7 +2,7 @@
 
 Sections, from purest to most integrated:
 
-* ``Strategy`` helpers — workspace creation, experiment ids, run locks.
+* ``Strategy`` helpers — experiment ids, run locks.
 * ``Sandbox.wrap`` — argv rewriting only (no enforcement).
 * ``get_sandbox`` — config -> concrete backend, plus platform gating.
 * Seatbelt profile renderer — pure string shape of ``_render_profile``.
@@ -36,49 +36,6 @@ from hillclimber.models import (
 from sandboxes import PassthroughSandbox, SeatbeltSandbox, get_sandbox
 from sandboxes.seatbelt import _render_profile, _sb_quote
 from strategies.base import Strategy
-
-# --------------------------------------------------------------------------- #
-# Strategy.create_workspace
-# --------------------------------------------------------------------------- #
-
-
-def test_create_workspace_makes_dir_and_returns_name(tmp_path: Path):
-    name = asyncio.run(Strategy.create_workspace(str(tmp_path), "ws1"))
-
-    assert name == "ws1"
-    workspace = tmp_path / ".hillclimber" / "ws1"
-    assert workspace.is_dir()
-
-
-def test_create_workspace_is_idempotent(tmp_path: Path):
-    asyncio.run(Strategy.create_workspace(str(tmp_path), "ws1"))
-    # A second call with the same name does not raise and returns the name.
-    name = asyncio.run(Strategy.create_workspace(str(tmp_path), "ws1"))
-
-    assert name == "ws1"
-    assert (tmp_path / ".hillclimber" / "ws1").is_dir()
-
-
-def test_create_workspace_supports_multiple_workspaces(tmp_path: Path):
-    asyncio.run(Strategy.create_workspace(str(tmp_path), "ws1"))
-    asyncio.run(Strategy.create_workspace(str(tmp_path), "ws2"))
-
-    assert (tmp_path / ".hillclimber" / "ws1").is_dir()
-    assert (tmp_path / ".hillclimber" / "ws2").is_dir()
-
-
-def test_create_workspace_raises_for_missing_path(tmp_path: Path):
-    missing = tmp_path / "does_not_exist"
-    with pytest.raises(FileNotFoundError):
-        asyncio.run(Strategy.create_workspace(str(missing), "ws1"))
-
-
-def test_create_workspace_rejects_invalid_name(tmp_path: Path):
-    with pytest.raises(ValueError):
-        asyncio.run(Strategy.create_workspace(str(tmp_path), "nested/ws"))
-    with pytest.raises(ValueError):
-        asyncio.run(Strategy.create_workspace(str(tmp_path), ""))
-
 
 # --------------------------------------------------------------------------- #
 # Strategy.new_experiment_id

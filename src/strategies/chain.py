@@ -1,9 +1,10 @@
 """The ``chain`` strategy.
 
-Chains cycles one after another: each run is attempted in sequence and folded
-into the running ``ExperimentStatus``. v1 is the thinnest slice — it establishes
-the baseline status that later cycles will accumulate into (see README "Core
-loop" / "Architecture seam"). The per-cycle mutation loop attaches here.
+Chains cycles one after another: each cycle forks a worktree from its parent,
+asks the orchestrator for a hypothesis, has the worker apply it, scores the
+committed result, and folds it into the running ``ExperimentStatus`` (see
+README "Core loop"). The next cycle builds on the last good branch, so the
+climb accumulates.
 """
 
 from __future__ import annotations
@@ -141,7 +142,7 @@ class Chain(Strategy):
 
             # 7. Remember this cycle so the next cycle's proposer can build on it,
             #    then fold the result back into the lock and hand the cycle back.
-            self._cycle_records().append(
+            self._cycle_records.append(
                 CycleRecord(hypothesis=hypothesis, before=parent_score.value, after=cycle.score_after.value)
             )
             await self.write_lock(worktree, cycle)
@@ -188,7 +189,7 @@ class Chain(Strategy):
             "Inspect the artefact in this directory and how it is scored, then "
             "propose exactly one concrete, testable change that should raise the "
             "eval score.\n\n"
-            f"{self._render_history(self._cycle_records())}"
+            f"{self._render_history(self._cycle_records)}"
             "Reply with only the hypothesis as one short paragraph."
         )
         return await self.harness.run(

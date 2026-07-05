@@ -104,7 +104,10 @@ class Strategy(ABC):
         progress_sink: RunEventSink | None = None,
         timeouts: Timeouts | None = None,
     ) -> None:
-        self._state = {}
+        # The strategy's memory of past cycles: each scored cycle appends the
+        # hypothesis it tried and how it moved the score, so the next hypothesis
+        # can build on what came before (see ``CycleRecord`` / ``_render_history``).
+        self._cycle_records: list[CycleRecord] = []
         # Held for future per-``Agent.harness`` selection, which will need to
         # build other harnesses with the same confinement policy.
         self.sandbox = sandbox
@@ -119,35 +122,6 @@ class Strategy(ABC):
         # ``hillclimber.progress``). Silent by default: the logs already narrate
         # every milestone, so only an injected consumer (the CLI dashboard) taps in.
         self.progress_sink: RunEventSink = progress_sink if progress_sink is not None else ignore_progress
-
-    @staticmethod
-    async def create_workspace(path: str, workspace_name: str) -> str:
-        """Create a named workspace directory under ``path/.hillclimber``.
-
-        Workspaces are isolated working directories for the climb, kept under a
-        ``.hillclimber`` folder so they sit alongside (but never clobber) the
-        artefact.
-
-        Args:
-            path: The base directory the workspace is created in. Must exist.
-            workspace_name: The workspace's name; becomes the directory name.
-
-        Returns:
-            The workspace name.
-
-        Raises:
-            FileNotFoundError: If ``path`` is not an existing directory.
-            ValueError: If ``workspace_name`` is empty or contains a path separator.
-        """
-        base = Path(path)
-        if not base.is_dir():
-            raise FileNotFoundError(f"not a directory: {path}")
-        if not workspace_name or "/" in workspace_name or "\\" in workspace_name:
-            raise ValueError(f"invalid workspace name: {workspace_name!r}")
-
-        workspace = base / ".hillclimber" / workspace_name
-        await asyncio.to_thread(workspace.mkdir, parents=True, exist_ok=True)
-        return workspace_name
 
     @staticmethod
     def new_experiment_id() -> str:
@@ -214,17 +188,6 @@ class Strategy(ABC):
             self.trace_sink(event.model_copy(update={"label": label}))
 
         return sink
-
-    def _cycle_records(self) -> list[CycleRecord]:
-        """The strategy's memory of past cycles, kept in ``self._state``.
-
-        Each scored cycle appends the hypothesis it tried and how it moved the
-        score; strategies read the list back so the next hypothesis builds on what
-        came before instead of rediscovering it. Lazily seeded on first access.
-        """
-        records = self._state.setdefault("cycle_records", [])
-        assert isinstance(records, list)
-        return records
 
     async def _commit_cycle(self, worktree: str, base_sha: str, index: int) -> str:
         """Commit the worker's change; return the cycle's commit sha.

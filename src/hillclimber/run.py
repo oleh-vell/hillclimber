@@ -41,10 +41,10 @@ async def run(
 ) -> ExperimentStatus:
     """Run an experiment end to end from its ``hillclimber.toml``.
 
-    v1 is the thinnest possible slice of the loop runner (see README
-    "Architecture seam"): parse the config from ``path`` (a directory holding a
-    ``hillclimber.toml``, or the file itself) and score the baseline once. The
-    per-cycle mutation loop attaches here later.
+    Parses the config from ``path`` (a directory holding a ``hillclimber.toml``,
+    or the file itself), preflights the configured models, scores the baseline
+    once, then hands off to the configured strategy, which drives the cycle
+    loop to completion (see ``strategies.chain``).
 
     Args:
         path: The experiment directory (or its ``hillclimber.toml``).

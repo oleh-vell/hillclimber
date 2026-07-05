@@ -36,6 +36,33 @@ def _config_data(**overrides: object) -> dict:
 
 
 # --------------------------------------------------------------------------- #
+# strict fields: typos and unsupported values fail at load time
+# --------------------------------------------------------------------------- #
+
+
+def test_agent_rejects_unknown_keys():
+    # No agent knob beyond harness/model/system_prompt is read anywhere, so a
+    # typo (system_promt, temperature, ...) must fail loudly, not validate
+    # cleanly and silently do nothing.
+    with pytest.raises(ValidationError, match="system_promt"):
+        Config.model_validate(
+            _config_data(
+                agents={
+                    "orchestrator": {"harness": "claude", "model": "m", "system_promt": "oops"},
+                    "worker": {"harness": "claude", "model": "m"},
+                }
+            )
+        )
+
+
+def test_goal_rejects_minimize_until_it_exists():
+    # Only maximizing is implemented; accepting "minimize" and silently
+    # maximizing anyway would be worse than an error.
+    with pytest.raises(ValidationError):
+        Goal.model_validate({"direction": "minimize"})
+
+
+# --------------------------------------------------------------------------- #
 # Goal.is_met
 # --------------------------------------------------------------------------- #
 

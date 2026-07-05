@@ -22,7 +22,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 def _utcnow() -> datetime:
@@ -40,8 +40,6 @@ class CycleStatus(StrEnum):
 
     running = "running"
     scored = "scored"
-    accepted = "accepted"
-    rejected = "rejected"
     failed = "failed"
 
 
@@ -51,38 +49,17 @@ class Agent(BaseModel):
     ``system_prompt`` is optional: when omitted from the config, the strategy
     fills in its role default at access time (see ``Strategy._role_agent``); one
     set here is an override, used verbatim.
+
+    Unknown keys are rejected (``extra="forbid"``): nothing reads any other
+    knob today, so a typo like ``system_promt = "..."`` must fail at load time
+    rather than validate cleanly and silently do nothing.
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     harness: str  # e.g. "claude" (alias: "claude code"); resolved by harnesses.get_harness
     model: str
     system_prompt: str | None = None  # None -> the strategy's role default
-    params: dict = Field(default_factory=dict)  # temperature, max tokens, etc.
-
-    @model_validator(mode="before")
-    @classmethod
-    def _collect_params(cls, data: object) -> object:
-        """Fold any extra keys into ``params``.
-
-        Tuning knobs are written flat in the config (``temperature = 0.5``)
-        rather than nested under a ``params`` table; anything that isn't a known
-        field is gathered into ``params`` here. An explicit ``params`` table
-        still works and takes precedence on key collisions.
-        """
-        if not isinstance(data, dict):
-            return data
-        known = {"harness", "model", "system_prompt", "params"}
-        extra = {k: v for k, v in data.items() if k not in known}
-        if not extra:
-            return data
-        rest = {k: v for k, v in data.items() if k in known}
-        # An explicit ``params`` table wins on key collisions; guard its type so a
-        # malformed (non-mapping) ``params`` is treated as empty rather than blowing
-        # up the spread.
-        explicit = rest.get("params", {})
-        if not isinstance(explicit, dict):
-            explicit = {}
-        rest["params"] = {**extra, **explicit}
-        return rest
 
 
 class CommandScorer(BaseModel):
@@ -194,12 +171,13 @@ class Eval(BaseModel):
 class Goal(BaseModel):
     """Definition of success — what the climb optimizes toward.
 
-    v1 is intentionally minimal: maximize the eval score. The field is kept
-    explicit (rather than hardcoded in the loop) so direction/target can grow
-    later without reshaping the model.
+    v1 is intentionally minimal: maximize the eval score. ``direction`` is a
+    one-member Literal so a config asking for ``"minimize"`` fails at load time
+    instead of being accepted and silently maximized; widen the Literal when
+    minimizing actually exists.
     """
 
-    direction: str = "maximize"  # v1: "maximize" only
+    direction: Literal["maximize"] = "maximize"
     target: float | None = None  # optional success threshold; reaching it stops the climb early
 
     def is_met(self, best: Score | None) -> bool:
@@ -288,7 +266,6 @@ class Config(BaseModel):
     # different code; see ``run``). When on, the runner instead snapshots the
     # dirty tree into a commit and climbs from that (see ``create_snapshot_commit``).
     auto_commit: bool = False
-    baseline_score: Score | None = None  # scored once, before any run
     scorer: Scorer  # the fitness function (v1: exactly one)
     # The OS sandbox that confines every agent CLI to its run's worktree. A
     # ``hillclimber.toml`` with no ``[sandbox]`` table gets the Seatbelt default.
@@ -355,7 +332,6 @@ class Cycle(BaseModel):
     hypothesis: str  # what this cycle tried (e.g. "Use pydantic...")
     score_before: Score
     score_after: Score | None = None
-    accepted: bool = False
     status: CycleStatus
     commit_sha: str | None = None  # pointer to the actual change
 
@@ -427,7 +403,6 @@ class CycleSummary(BaseModel):
     status: CycleStatus
     hypothesis: str = ""  # what this cycle tried, for display
     score_after: Score | None = None
-    accepted: bool
     delta: float  # score_after - baseline (computed)
     # Where the cycle's change lives, so ``hillclimber status`` can point at the
     # winner and print a real merge command. The branch outlives the worktree
@@ -453,7 +428,6 @@ class CycleSummary(BaseModel):
             status=cycle.status,
             hypothesis=cycle.hypothesis,
             score_after=after,
-            accepted=cycle.accepted,
             delta=delta,
             branch=cycle.branch,
             worktree=cycle.worktree,
@@ -470,7 +444,6 @@ class ExperimentStatus(BaseModel):
     baseline_score: Score
     cycles: list[CycleSummary]
     best: CycleSummary | None = None  # COMPUTED, not stored
-    in_progress: list[str] = Field(default_factory=list)  # cycle ids currently running
     completed: int
     total: int
     # Folded from the lock: no ExperimentFinished line -> "running", which also

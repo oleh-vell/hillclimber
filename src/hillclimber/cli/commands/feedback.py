@@ -26,8 +26,8 @@ import typer
 from hillclimber.cli.console import can_prompt, console, err_console
 from hillclimber.cli.state import CLIState
 
-# Placeholder — the real domain is not registered yet. Update this when the FE
-# deploys; until then the command only works with HILLCLIMBER_FEEDBACK_URL set.
+# The live endpoint (the hillclimber.dev API route, which relays to Telegram).
+# HILLCLIMBER_FEEDBACK_URL overrides it for tests and self-hosting.
 DEFAULT_FEEDBACK_URL = "https://hillclimber.dev/api/feedback"
 
 # Mirrors MAX_MESSAGE_LENGTH in the API route; rejecting locally saves a round
